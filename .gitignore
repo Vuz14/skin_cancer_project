@@ -1,0 +1,29 @@
+# --- DATASET & ẢNH (Quan trọng nhất) ---
+data/
+*.csv
+*.jpg
+*.jpeg
+*.png
+*.npy
+
+# --- CÁC FILE/THƯ MỤC HỆ THỐNG PYTHON ---
+__pycache__/
+*.pyc
+
+# --- MÔI TRƯỜNG ẢO (Rất nặng, không up lên) ---
+.venv/
+venv/
+env/
+.env
+
+# --- FILE CHECKPOINT MODEL (Nặng GB, không up lên) ---
+*.pt
+*.pth
+*.ckpt
+D:/NCKH_Checkpoints_*/
+
+# --- LOG & IDE CONFIG ---
+wandb/
+.idea/
+.vscode/
+*.log
