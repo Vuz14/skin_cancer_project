@@ -14,7 +14,7 @@ def identity(x):
 class DermoscopyDataset(Dataset):
     def __init__(self, df: pd.DataFrame, img_root: str, img_size: int, metadata_mode: str = 'diag1', 
                  train: bool = True, selected_features: Optional[list] = None):
-        # Làm sạch tên cột (tránh lỗi khoảng trắng) và tạo bản sao để tránh thay đổi gốc
+        # Làm sạch tên cột và tạo bản sao
         self.df = df.copy().reset_index(drop=True)
         self.df.columns = self.df.columns.str.strip()
         
@@ -60,15 +60,38 @@ class DermoscopyDataset(Dataset):
                 std = float(np.nanstd(arr)) + 1e-6 if not np.all(np.isnan(arr)) else 1.0
                 self.num_mean_std[nc] = (mean, std)
 
-        self.transform = transforms.Compose([
-            transforms.RandomResizedCrop(img_size, scale=(0.7, 1.0)) if train else transforms.Resize((img_size, img_size)),
-            transforms.RandomHorizontalFlip() if train else transforms.Lambda(identity),
-            transforms.RandomVerticalFlip() if train else transforms.Lambda(identity),
-            transforms.ColorJitter(0.2, 0.2, 0.2, 0.02) if train else transforms.Lambda(identity),
-            transforms.RandomRotation(15) if train else transforms.Lambda(identity),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-        ])
+        if self.train:
+            self.transform = transforms.Compose([
+                # 1. Resize và Crop ngẫu nhiên mạnh hơn (từ 0.6 thay vì 0.7)
+                transforms.RandomResizedCrop(img_size, scale=(0.6, 1.0)),
+                
+                # 2. Lật xoay đa hướng
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.RandomVerticalFlip(p=0.5),
+                transforms.RandomRotation(45), 
+                
+                # 3. Biến dạng hình học: Dịch chuyển và co giãn
+                transforms.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.8, 1.2)),
+                
+                # 4. Thay đổi màu sắc mạnh tay hơn để mô hình không bị phụ thuộc vào sắc độ ảnh
+                transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1),
+                
+                # 5. Làm mờ nhẹ (Gaussian Blur) giúp mô hình bền bỉ với ảnh chất lượng thấp
+                transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0)),
+                
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                
+                # 6. ✅ Random Erasing: Xóa ngẫu nhiên các vùng nhỏ (giả lập lông, thước đo, vật cản)
+                transforms.RandomErasing(p=0.3, scale=(0.02, 0.2), ratio=(0.3, 3.3), value=0)
+            ])
+        else:
+            # Đối với Validation/Test: Chỉ Resize và Chuẩn hóa
+            self.transform = transforms.Compose([
+                transforms.Resize((img_size, img_size)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ])
 
     def __len__(self):
         return len(self.df)
