@@ -4,75 +4,69 @@ import torch
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import wandb
-from sklearn.model_selection import train_test_split
 import shap
 
 # --- THÊM ĐƯỜNG DẪN SRC ---
-sys.path.append(os.path.join(os.path.dirname(__file__), 'D:\skin_cancer_project\src'))
+# Sử dụng đường dẫn tương đối để linh hoạt hơn
+sys.path.append(os.path.join(os.path.dirname(__file__), 'D:\skin_cancer_project'))
 
 from src.data_logic.bcn_dataset import DermoscopyDataset
 from src.models import get_model
 
-# ------------------- CONFIG (Giữ nguyên) -------------------
+# ------------------- CONFIG (Đồng bộ với train_bcn mới) -------------------
 TEST_CONFIG = {
-    'CSV_PATH': r'D:\skin_cancer_project\dataset\metadata\metadata.csv',
-    'IMG_ROOT': r'D:\skin_cancer_project\dataset\ISIC-preprocessed-test11_refined',
-    'MODEL_OUT': r'D:\skin_cancer_project\ouput\bcn20000_checkpint',
+    # Sử dụng file test đã chia sẵn để giải thích
+    'TEST_CSV': r'D:\skin_cancer_project\dataset\metadata\bcn20000_test.csv',
+    # Cần file train để lấy thông tin encoders (LabelEncoder, Mean/Std)
+    'TRAIN_CSV': r'D:\skin_cancer_project\dataset\metadata\bcn20000_train.csv',
+    'IMG_ROOT': r'D:\skin_cancer_project\dataset\Bcn20000-preprocessed', 
+    'MODEL_OUT': r'D:\skin_cancer_project\checkpoint_bcn20000',
     'DEVICE': 'cuda' if torch.cuda.is_available() else 'cpu',
     'IMG_SIZE': 224,
-    'METADATA_MODE': 'full_weighted',  # full / late_fusion
+    'METADATA_MODE': 'full_weighted',
     'SEED': 42,
-    'NSAMPLES_SHAP': 20
+    'NSAMPLES_SHAP': 50, 
+    'SELECTED_FEATURES': None # Danh sách biến nếu bạn đã lọc lúc train
 }
-
-# ------------------- W&B INIT -------------------
-def init_wandb_existing(config, run_name="SHAP Analysis"):
-    run = wandb.init(
-        project="nckh_skin_cancer_2025",
-        name=None,  # None để W&B tự tạo run mới
-        config=config,
-        reinit=True,
-        dir="D:/wandb_temp"
-    )
-    return run
 
 # ------------------- LOAD MODEL -------------------
 def load_model_and_encoders(config):
     device = torch.device(config['DEVICE'])
-    df = pd.read_csv(config['CSV_PATH'])
+    
+    # Load data
+    train_df = pd.read_csv(config['TRAIN_CSV'])
+    test_df = pd.read_csv(config['TEST_CSV'])
 
-    # Logic ISIC
-    if 'image_path' not in df.columns:
-        if 'isic_id' in df.columns:
+    # Tiền xử lý đồng bộ với train_bcn
+    for df in [train_df, test_df]:
+        if 'image_path' not in df.columns:
             df['image_path'] = df['isic_id'].astype(str) + '.jpg'
-        else:
-            raise ValueError("CSV phải có image_path hoặc isic_id")
+        df['diagnosis_1'] = df['diagnosis_1'].astype(str).str.strip().str.lower()
+        df['label'] = df['diagnosis_1'].apply(lambda x: 1 if 'malig' in x else 0)
 
-    df['diagnosis_1'] = df['diagnosis_1'].astype(str).str.strip().str.lower()
-    df = df[~df['diagnosis_1'].isin(['nan', '', 'none', 'null'])]
-    df['label'] = df['diagnosis_1'].apply(lambda x: 1 if 'malig' in x else 0)
-
-    train_df, temp_df = train_test_split(df, test_size=0.3, random_state=config['SEED'], stratify=df['label'])
-    val_df, test_df = train_test_split(temp_df, test_size=1 / 3, random_state=config['SEED'], stratify=temp_df['label'])
-
+    # Khởi tạo dataset train để tái hiện lại các Encoders
     train_ds = DermoscopyDataset(
         train_df, config['IMG_ROOT'], config['IMG_SIZE'],
-        metadata_mode=config['METADATA_MODE'], train=False
+        metadata_mode=config['METADATA_MODE'], train=False,
+        selected_features=config['SELECTED_FEATURES']
     )
 
-    # --- Chọn model đúng mode qua Factory ---
+    # --- Khởi tạo model dựa trên cardinality của DS đã lọc ---
     model = get_model(config, train_ds.cat_cardinalities, len(train_ds.numeric_cols)).to(device)
 
+    # Load trọng số từ checkpoint tốt nhất
     ckpt_path = os.path.join(config['MODEL_OUT'], f"best_{config['METADATA_MODE']}.pt")
     if not os.path.exists(ckpt_path):
-        raise FileNotFoundError(f"Không tìm thấy: {ckpt_path}")
+        raise FileNotFoundError(f"Không tìm thấy checkpoint tại: {ckpt_path}")
 
     checkpoint = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(checkpoint['state_dict'])
     model.eval()
-    print(f"✅ Đã load model từ: {ckpt_path}")
-    return model, device, train_ds, train_df, test_df
+    
+    print(f" Đã load model thành công từ: {ckpt_path}")
+    print(f" Features đang phân tích: {train_ds.numeric_cols + train_ds.categorical_cols}")
+    
+    return model, device, train_ds, test_df
 
 # ------------------- ENCODE METADATA -------------------
 def encode_metadata_with_train_encoders(row, train_ds):
@@ -87,7 +81,7 @@ def encode_metadata_with_train_encoders(row, train_ds):
 
     cats = []
     for cc in train_ds.categorical_cols:
-        raw = str(row.get(cc, 'NA')) # ISIC dùng 'NA'
+        raw = str(row.get(cc, 'NA'))
         le = train_ds.encoders[cc]
         try:
             idx = int(le.transform([raw])[0])
@@ -97,12 +91,10 @@ def encode_metadata_with_train_encoders(row, train_ds):
     cats = torch.tensor(cats, dtype=torch.long)
     return nums, cats
 
-# =========================================================
-# SHAP + W&B LOGGING (Logic gốc)
-# =========================================================
+# ------------------- SHAP ANALYSIS -------------------
 def test_metadata_shap_beeswarm(model, train_ds, test_df, device,
-                                save_dir="test_shap_full",
-                                top_n_display=5, nsamples=None, sample_n=100, bg_samples=20):
+                                save_dir="explain_results_bcn",
+                                top_n_display=10, sample_n=100, bg_samples=20):
     os.makedirs(save_dir, exist_ok=True)
 
     # --- feature names ---
@@ -113,6 +105,7 @@ def test_metadata_shap_beeswarm(model, train_ds, test_df, device,
         for cls in train_ds.encoders[cc].classes_:
             feature_names.append(f"{cc}_{cls}")
 
+    # Lấy mẫu từ tập test để giải thích
     subset_df = test_df.sample(n=min(sample_n, len(test_df)), random_state=42)
     meta_list = []
 
@@ -133,11 +126,11 @@ def test_metadata_shap_beeswarm(model, train_ds, test_df, device,
         n_i, c_i = encode_metadata_with_train_encoders(row_i, train_ds)
         meta_arr = torch.cat([n_i, c_i.float()]).unsqueeze(0).numpy()
         meta_list.append(to_onehot(meta_arr))
+    
     meta_stack = np.vstack(meta_list)
     meta_df = pd.DataFrame(meta_stack, columns=feature_names)
 
-    # --- model wrapper ---
-    def model_wrapper(meta_array, config=TEST_CONFIG):
+    def model_wrapper(meta_array):
         with torch.no_grad():
             K = meta_array.shape[0]
             dummy_img = torch.zeros((K, 3, 224, 224)).to(device)
@@ -152,18 +145,15 @@ def test_metadata_shap_beeswarm(model, train_ds, test_df, device,
                 meta_cat_list.append(torch.tensor(idx, dtype=torch.long))
                 offset += card
 
-            if config['METADATA_MODE'] == 'late_fusion':
-                meta_vec = torch.cat([meta_num] + [c.float().unsqueeze(1).to(device) for c in meta_cat_list], dim=1)
-                logits = model(dummy_img, meta_vec)
+            if len(meta_cat_list) > 0:
+                meta_cat = torch.stack(meta_cat_list, dim=1).to(device)
             else:
-                if len(meta_cat_list) > 0:
-                    meta_cat = torch.stack(meta_cat_list, dim=1).to(device)
-                else:
-                    meta_cat = torch.empty((K, 0), dtype=torch.long).to(device)
-                logits = model(dummy_img, meta_num, meta_cat)
+                meta_cat = torch.empty((K, 0), dtype=torch.long).to(device)
+            
+            logits = model(dummy_img, meta_num, meta_cat)
             return torch.sigmoid(logits).cpu().numpy().reshape(-1)
 
-    # --- background ---
+    # Dùng tập train làm background để tính SHAP
     bg_df = train_ds.df.sample(n=min(bg_samples, len(train_ds.df)), random_state=123)
     bg_list = []
     for _, row_i in bg_df.iterrows():
@@ -172,53 +162,27 @@ def test_metadata_shap_beeswarm(model, train_ds, test_df, device,
         bg_list.append(to_onehot(meta_arr))
     bg_stack = np.vstack(bg_list)
 
-    nsamples = nsamples if nsamples is not None else TEST_CONFIG['NSAMPLES_SHAP']
     explainer = shap.KernelExplainer(model_wrapper, bg_stack)
-    shap_vals = explainer.shap_values(meta_stack, nsamples=nsamples)
-    # Xử lý output list nếu có
-    shap_vals = shap_vals[1] if isinstance(shap_vals, list) else shap_vals
+    print(f"⌛ Đang tính toán SHAP values cho {sample_n} mẫu tập TEST...")
+    shap_vals = explainer.shap_values(meta_stack, nsamples=TEST_CONFIG['NSAMPLES_SHAP'])
+    
+    if isinstance(shap_vals, list):
+        shap_vals = shap_vals[1]
 
-    # --- Compute importance ---
+    # --- Plot & Save ---
+    plt.figure(figsize=(12, 8))
+    shap.summary_plot(shap_vals, meta_df, show=False, max_display=top_n_display)
+    plt.title(f"SHAP Analysis (BCN Test Set) - Mode: {TEST_CONFIG['METADATA_MODE']}")
+    plt.savefig(os.path.join(save_dir, "shap_beeswarm_test.png"), dpi=300, bbox_inches='tight')
+    plt.close()
+
     mean_abs = np.abs(shap_vals).mean(axis=0)
-    tmp_df = pd.DataFrame({'feature': feature_names, 'mean_abs_shap': mean_abs}).sort_values('mean_abs_shap', ascending=False)
-
-    # --- short names ---
-    short_names = [f"x{i+1}" for i in range(len(feature_names))]
-    meta_df_short = meta_df.copy()
-    meta_df_short.columns = short_names
-
-    # --- Plot Top N ---
-    plt.figure(figsize=(12, 6))
-    shap.summary_plot(shap_vals, meta_df_short, feature_names=short_names, show=False, max_display=top_n_display)
-    top_path = os.path.join(save_dir, "shap_top.png")
-    plt.savefig(top_path, dpi=300, bbox_inches='tight')
-    plt.close()
-
-    # --- Plot ALL ---
-    plt.figure(figsize=(12, max(6, len(feature_names) * 0.1)))
-    shap.summary_plot(shap_vals, meta_df_short, feature_names=short_names, show=False, max_display=len(feature_names))
-    all_path = os.path.join(save_dir, "shap_all.png")
-    plt.savefig(all_path, dpi=300, bbox_inches='tight')
-    plt.close()
-
-    # --- SAVE CSV ---
-    tmp_df.to_csv(os.path.join(save_dir, "shap_feature_importance.csv"), index=False)
-    pd.DataFrame({"short": short_names, "full": feature_names}).to_csv(
-        os.path.join(save_dir, "feature_mapping.csv"), index=False
-    )
-
-    # --- W&B LOG ---
-    wandb.log({
-        "SHAP/summary_top": wandb.Image(top_path),
-        "SHAP/summary_all": wandb.Image(all_path),
-        "SHAP/feature_importance": wandb.Table(dataframe=tmp_df.reset_index(drop=True)),
-        "SHAP/feature_mapping": wandb.Table(dataframe=pd.DataFrame({"short": short_names, "full": feature_names}))
-    })
-    print("🎉 Logged SHAP to W&B successfully!")
+    importance_df = pd.DataFrame({'feature': feature_names, 'mean_abs_shap': mean_abs}).sort_values('mean_abs_shap', ascending=False)
+    importance_df.to_csv(os.path.join(save_dir, "feature_importance_test.csv"), index=False)
+    
+    print(f"🎉 Kết quả giải thích tập TEST đã lưu vào: {save_dir}")
 
 # ------------------- MAIN -------------------
 if __name__ == "__main__":
-    run = init_wandb_existing(TEST_CONFIG, run_name="SHAP Metadata Mode")
-    model, device, train_ds, train_df, test_df = load_model_and_encoders(TEST_CONFIG)
+    model, device, train_ds, test_df = load_model_and_encoders(TEST_CONFIG)
     test_metadata_shap_beeswarm(model, train_ds, test_df, device)
-    wandb.finish()

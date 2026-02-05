@@ -8,92 +8,67 @@ import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 
 # --- THÊM ĐƯỜNG DẪN SRC ---
-sys.path.append(os.path.join(os.path.dirname(__file__), 'D:\skin_cancer_project\src'))
+sys.path.append(os.path.join(os.path.dirname(__file__), 'D:\skin_cancer_project'))
 
 from src.data_logic.ham_dataset import HAM10000Dataset
 from src.models import get_model
 
-# ------------------- CONFIG (Giữ nguyên) -------------------
+# ------------------- CONFIG (Đồng bộ với train_ham mới) -------------------
 TEST_CONFIG = {
-    'CSV_PATH': r'D:\skin_cancer_project\dataset\metadata\ham10000_processed.csv',
+    # Sử dụng file test đã chia sẵn để giải thích
+    'TEST_CSV': r'D:\skin_cancer_project\dataset\metadata\ham10000_test.csv',
+    # Cần file train để lấy thông tin encoders (Mean/Std, LabelEncoder)
+    'TRAIN_CSV': r'D:\skin_cancer_project\dataset\metadata\ham10000_train.csv',
     'IMG_ROOT': r'D:\skin_cancer_project\dataset\Ham10000-preprocessed',
-    'MODEL_OUT': r'D:\skin_cancer_project\ouput\ham10000_checkpint',
+    'MODEL_OUT': r'D:\skin_cancer_project\checkpoint_ham10000',
     'DEVICE': 'cuda' if torch.cuda.is_available() else 'cpu',
     'IMG_SIZE': 224,
     'METADATA_MODE': 'full_weighted',
     'SEED': 42,
-    'NSAMPLES_SHAP': 10
+    'NSAMPLES_SHAP': 50, 
+    'SELECTED_FEATURES': None # Danh sách biến nếu bạn đã lọc lúc train
 }
 
-# =========================================================
-# ✅ LOAD MODEL + AUTO METADATA
-# =========================================================
+# ------------------- LOAD MODEL -------------------
 def load_model_and_encoders(config):
     device = torch.device(config['DEVICE'])
-    df = pd.read_csv(config['CSV_PATH'])
+    
+    # Load data
+    train_df = pd.read_csv(config['TRAIN_CSV'])
+    test_df = pd.read_csv(config['TEST_CSV'])
 
-    # ⚙️ Giữ lại các cột cần thiết (Logic cũ của bạn)
-    keep_cols = ["image_id", "age", "sex", "localization", "dx"]
-    available_cols = [c for c in keep_cols if c in df.columns]
-    df = df[available_cols].copy()
+    # Tiền xử lý đồng bộ với train_ham
+    for df in [train_df, test_df]:
+        df['image_path'] = df['image_id'].astype(str) + '.jpg'
+        if 'dx' in df.columns:
+            df['label'] = df['dx'].apply(lambda x: 1 if x in ['mel', 'bcc', 'akiec'] else 0)
 
-    # Chuẩn hóa tên cột
-    df.columns = df.columns.str.strip().str.lower()
-
-    # Fill missing values
-    if 'age' in df.columns:
-        df['age_scaled'] = pd.to_numeric(df['age'], errors='coerce')
-    else:
-        df['age_scaled'] = np.nan
-
-    for cat_col in ["sex", "localization", "dx"]:
-        if cat_col in df.columns:
-            df[cat_col] = df[cat_col].fillna("unknown")
-
-    # ✅ Gán nhãn nhị phân tự động
-    if "dx" in df.columns:
-        df["label"] = df["dx"].astype(str).apply(lambda x: 1 if "mel" in x or "malig" in x else 0)
-    else:
-        # Fallback nếu không có cột dx nhưng có cột label sẵn
-        if "label" not in df.columns:
-             raise ValueError("⚠️ Cột 'dx' hoặc 'label' bắt buộc phải có.")
-
-    # Tách tập train/val/test (Giữ seed cố định để khớp với lúc train)
-    train_df, temp_df = train_test_split(df, test_size=0.2, random_state=config['SEED'], stratify=df['label'])
-    # Lưu ý: Train_10k dùng test_size=0.2, sau đó split tiếp val/test từ temp
-    val_df, test_df = train_test_split(temp_df, test_size=0.5, random_state=config['SEED'], stratify=temp_df['label'])
-
-    # 🧩 Dataset (Sử dụng class từ src)
+    # Khởi tạo dataset train để tái hiện lại các Encoders
     train_ds = HAM10000Dataset(
-        train_df,
-        config['IMG_ROOT'],
-        config['IMG_SIZE'],
-        metadata_mode=config['METADATA_MODE'],
-        train=False
+        train_df, config['IMG_ROOT'], config['IMG_SIZE'],
+        metadata_mode=config['METADATA_MODE'], train=False,
+        selected_features=config['SELECTED_FEATURES']
     )
 
-    # ✅ Model (Sử dụng Factory từ src)
+    # --- Khởi tạo model dựa trên cardinality của DS đã lọc ---
     model = get_model(config, train_ds.cat_cardinalities, len(train_ds.numeric_cols)).to(device)
 
-    # 🔍 Load checkpoint
+    # Load trọng số từ checkpoint
     ckpt_path = os.path.join(config['MODEL_OUT'], f"best_{config['METADATA_MODE']}.pt")
     if not os.path.exists(ckpt_path):
-        raise FileNotFoundError(f"Không tìm thấy checkpoint: {ckpt_path}")
+        raise FileNotFoundError(f" Không tìm thấy checkpoint tại: {ckpt_path}")
 
-    checkpoint = torch.load(ckpt_path, map_location=device) # weights_only=True nếu pytorch mới
+    checkpoint = torch.load(ckpt_path, map_location=device)
     model.load_state_dict(checkpoint['state_dict'])
     model.eval()
 
-    print(f"✅ Đã load model từ: {ckpt_path}")
-    print(f"📊 Numeric cols: {train_ds.numeric_cols}")
-    print(f"📊 Categorical cols: {train_ds.categorical_cols}")
+    print(f" Đã load model từ: {ckpt_path}")
+    print(f" Numeric cols: {train_ds.numeric_cols}")
+    print(f" Categorical cols: {train_ds.categorical_cols}")
     
-    return model, device, train_ds, train_df, test_df
+    return model, device, train_ds, test_df
 
-
-# =========================================================
-# 🧩 Encode metadata
-# =========================================================
+# ------------------- ENCODE METADATA -------------------
 def encode_metadata_with_train_encoders(row, train_ds):
     nums = []
     for nc in train_ds.numeric_cols:
@@ -106,7 +81,7 @@ def encode_metadata_with_train_encoders(row, train_ds):
 
     cats = []
     for cc in train_ds.categorical_cols:
-        raw = str(row.get(cc, 'unknown')) # HAM10000 dùng 'unknown'
+        raw = str(row.get(cc, 'unknown'))
         le = train_ds.encoders[cc]
         try:
             idx = int(le.transform([raw])[0])
@@ -116,14 +91,10 @@ def encode_metadata_with_train_encoders(row, train_ds):
     cats = torch.tensor(cats, dtype=torch.long)
     return nums, cats
 
-# =========================================================
-# ✅ test_metadata_shap_beeswarm (Logic gốc)
-# =========================================================
-def test_metadata_shap_beeswarm(
-        model, train_ds, test_df, device,
-        save_dir="test_shap_full_weighted",
-        top_n_display=5, nsamples=None, bg_samples=10, sample_n=1000):
-
+# ------------------- SHAP ANALYSIS -------------------
+def test_metadata_shap_beeswarm(model, train_ds, test_df, device,
+                                save_dir="explain_results_ham",
+                                top_n_display=10, sample_n=100, bg_samples=20):
     os.makedirs(save_dir, exist_ok=True)
 
     # --- feature names ---
@@ -135,7 +106,7 @@ def test_metadata_shap_beeswarm(
         for cls in le.classes_:
             feature_names.append(f"{cc}_{cls}")
 
-    # --- sample subset ---
+    # Lấy mẫu ngẫu nhiên từ tập TEST để giải thích
     subset_df = test_df.sample(n=min(sample_n, len(test_df)), random_state=42)
     meta_list = []
 
@@ -152,23 +123,21 @@ def test_metadata_shap_beeswarm(
             offset += 1
         return np.hstack([meta_array[:, :num_cols]] + onehot_list)
 
-    # --- encode metadata ---
+    # Encode metadata
     for _, row_i in subset_df.iterrows():
         n_i, c_i = encode_metadata_with_train_encoders(row_i, train_ds)
         meta_arr = torch.cat([n_i, c_i.float()]).unsqueeze(0).cpu().numpy()
-        meta_onehot = to_onehot(meta_arr)
-        meta_list.append(meta_onehot)
+        meta_list.append(to_onehot(meta_arr))
     meta_stack = np.vstack(meta_list)
-    
     meta_df = pd.DataFrame(meta_stack, columns=feature_names)
 
-    # --- model wrapper ---
+    # Model wrapper
     def model_wrapper(meta_array):
         with torch.no_grad():
             K = meta_array.shape[0]
-            dummy_img = torch.zeros((K, 3, 224, 224))
+            dummy_img = torch.zeros((K, 3, 224, 224)).to(device)
             num_cols = len(train_ds.numeric_cols)
-            meta_num = torch.tensor(meta_array[:, :num_cols], dtype=torch.float32)
+            meta_num = torch.tensor(meta_array[:, :num_cols], dtype=torch.float32).to(device)
             offset = num_cols
             meta_cat_list = []
             for cc in train_ds.categorical_cols:
@@ -177,104 +146,48 @@ def test_metadata_shap_beeswarm(
                 idx = np.argmax(onehot, axis=1)
                 meta_cat_list.append(torch.tensor(idx, dtype=torch.long))
                 offset += card
-            if len(meta_cat_list) > 0:
-                meta_cat = torch.stack(meta_cat_list, dim=1)
-            else:
-                meta_cat = torch.empty((K, 0), dtype=torch.long)
             
-            # Gọi model từ src
-            logits = model(dummy_img.to(device), meta_num.to(device), meta_cat.to(device))
-            out = torch.sigmoid(logits).cpu().numpy()
-            return out.reshape(-1)
+            if len(meta_cat_list) > 0:
+                meta_cat = torch.stack(meta_cat_list, dim=1).to(device)
+            else:
+                meta_cat = torch.empty((K, 0), dtype=torch.long).to(device)
+            
+            logits = model(dummy_img, meta_num, meta_cat)
+            return torch.sigmoid(logits).cpu().numpy().reshape(-1)
 
-    # --- background for SHAP ---
+    # Background từ tập TRAIN để tính SHAP
     bg_df = train_ds.df.sample(n=min(bg_samples, len(train_ds.df)), random_state=123)
     bg_list = []
     for _, row_i in bg_df.iterrows():
         n_i, c_i = encode_metadata_with_train_encoders(row_i, train_ds)
         meta_arr = torch.cat([n_i, c_i.float()]).unsqueeze(0).cpu().numpy()
-        meta_onehot = to_onehot(meta_arr)
-        bg_list.append(meta_onehot)
+        bg_list.append(to_onehot(meta_arr))
     bg_stack = np.vstack(bg_list)
 
-    # --- SHAP ---
-    nsamples = nsamples if nsamples is not None else TEST_CONFIG.get('NSAMPLES_SHAP', 10)
+    # SHAP
     explainer = shap.KernelExplainer(model_wrapper, bg_stack)
-    print(f"🔍 Computing SHAP values for {len(subset_df)} samples (nsamples={nsamples})...")
-    shap_vals = explainer.shap_values(meta_stack, nsamples=nsamples)
+    print(f"⌛ Computing SHAP values cho {sample_n} mẫu tập TEST...")
+    shap_vals = explainer.shap_values(meta_stack, nsamples=TEST_CONFIG['NSAMPLES_SHAP'])
 
-    # --- xử lý output ---
     if isinstance(shap_vals, list):
-        chosen = 1 if len(shap_vals) >= 2 else 0
-        shap_values_for_plot = np.array(shap_vals[chosen])
-    else:
-        shap_values_for_plot = np.array(shap_vals)
+        shap_vals = shap_vals[1] if len(shap_vals) > 1 else shap_vals[0]
 
-    # --- auto xlim range ---
-    q_low, q_high = np.percentile(shap_values_for_plot, [5, 95])
-    xlim_low = q_low * 1.2
-    xlim_high = q_high * 1.2
-
-    # --- compute importance ---
-    mean_abs = np.abs(shap_values_for_plot).mean(axis=0).flatten()
-    tmp_df = pd.DataFrame({'feature': feature_names, 'mean_abs_shap': mean_abs}).sort_values('mean_abs_shap', ascending=False)
-    print("🏆 Top features by mean |SHAP|:")
-    print(tmp_df.head(15))
-
-    # --- short name mapping ---
-    short_names = [f"x{i+1}" for i in range(len(feature_names))]
-    meta_df_short = meta_df.copy()
-    meta_df_short.columns = short_names
-
-    # --- plot Top N ---
-    TOP_N_DISPLAY = min(top_n_display, len(feature_names))
-    fig_height = max(6, TOP_N_DISPLAY * 0.6)
-    plt.figure(figsize=(12, fig_height))
-    shap.summary_plot(
-        shap_values_for_plot,
-        meta_df_short,
-        feature_names=short_names,
-        show=False,
-        plot_type="dot",
-        max_display=TOP_N_DISPLAY
-    )
-    plt.title(f"🌈 SHAP Beeswarm Plot (Top {TOP_N_DISPLAY} Metadata Features)", fontsize=14, pad=20)
-    plt.tight_layout()
-    plt.xlim(xlim_low, xlim_high)
-    summary_path = os.path.join(save_dir, f"shap_summary_beeswarm_top_{TOP_N_DISPLAY}_features.png")
-    plt.savefig(summary_path, dpi=300, bbox_inches='tight')
+    # Plot & Save
+    plt.figure(figsize=(12, 8))
+    shap.summary_plot(shap_vals, meta_df, show=False, max_display=top_n_display)
+    plt.title(f"SHAP Analysis (HAM10000 Test Set) - Mode: {TEST_CONFIG['METADATA_MODE']}")
+    plt.savefig(os.path.join(save_dir, "shap_summary_beeswarm_test.png"), dpi=300, bbox_inches='tight')
     plt.close()
-    print(f"✅ Saved TOP {TOP_N_DISPLAY} beeswarm → {summary_path}")
 
-    # --- plot all features ---
-    plt.figure(figsize=(12, max(8, len(feature_names) * 0.25)))
-    shap.summary_plot(
-        shap_values_for_plot,
-        meta_df_short,
-        feature_names=short_names,
-        show=False,
-        plot_type="dot",
-        max_display=len(feature_names)
-    )
-    plt.title("🌈 SHAP Beeswarm Plot (All Metadata Features)", fontsize=14, pad=20)
-    plt.tight_layout()
-    plt.xlim(xlim_low, xlim_high)
-    all_path = os.path.join(save_dir, "shap_summary_beeswarm_all_features.png")
-    plt.savefig(all_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"✅ Saved ALL features beeswarm → {all_path}")
-
-    # --- save importance & mapping ---
-    all_features_df = tmp_df.reset_index(drop=True)
-    all_features_df.to_csv(os.path.join(save_dir, "all_features_importance.csv"), index=False)
-    pd.DataFrame({"short_name": short_names, "full_name": feature_names}).to_csv(
-        os.path.join(save_dir, "feature_name_mapping.csv"), index=False)
-    print(f"✅ Saved feature mapping + importance CSVs to → {save_dir}")
-
-    print("🎯 SHAP analysis completed successfully!")
+    # Lưu CSV
+    mean_abs = np.abs(shap_vals).mean(axis=0)
+    importance_df = pd.DataFrame({'feature': feature_names, 'mean_abs_shap': mean_abs}).sort_values('mean_abs_shap', ascending=False)
+    importance_df.to_csv(os.path.join(save_dir, "feature_importance_test.csv"), index=False)
+    
+    print(f"🎉 Kết quả giải thích tập TEST đã lưu tại: {save_dir}")
 
 # ------------------- MAIN -------------------
 if __name__ == "__main__":
-    print("🚀 Bắt đầu SHAP Beeswarm (HAM10000)...")
-    model, device, train_ds, train_df, test_df = load_model_and_encoders(TEST_CONFIG)
+    print("🚀 Bắt đầu giải thích mô hình HAM10000 trên tập TEST...")
+    model, device, train_ds, test_df = load_model_and_encoders(TEST_CONFIG)
     test_metadata_shap_beeswarm(model, train_ds, test_df, device)

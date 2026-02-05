@@ -14,16 +14,24 @@ def identity(x):
 
 class HAM10000Dataset(Dataset):
     def __init__(self, df: pd.DataFrame, img_root: str, img_size: int, metadata_mode: str = 'diag1',
-                 train: bool = True):
+                 train: bool = True, selected_features: Optional[list] = None):
         self.df = df.reset_index(drop=True)
         self.img_root = img_root
         self.img_size = img_size
         self.train = train
         self.metadata_mode = metadata_mode
 
-        # Metadata config
-        self.categorical_cols = ['localization', 'sex']
-        self.numeric_cols = ['age']
+        # Danh sách tất cả các biến metadata gốc của HAM10000
+        self.all_categorical = ['localization', 'sex']
+        self.all_numeric = ['age']
+
+        # Logic lọc biến: Nếu có selected_features từ quá trình SHAP, chỉ giữ lại các biến đó
+        if selected_features is not None:
+            self.categorical_cols = [c for c in self.all_categorical if c in selected_features]
+            self.numeric_cols = [c for c in self.all_numeric if c in selected_features]
+        else:
+            self.categorical_cols = self.all_categorical
+            self.numeric_cols = self.all_numeric
 
         self.encoders: Dict[str, LabelEncoder] = {}
         self.cat_cardinalities: Dict[str, int] = {}
@@ -91,7 +99,6 @@ class HAM10000Dataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.df.loc[idx]
-
         img_path = str(row['image_path'])
 
         img = self.transform(self._load_image(img_path))
@@ -99,7 +106,6 @@ class HAM10000Dataset(Dataset):
         meta_num, meta_cat = self._encode_metadata(row)
 
         if self.metadata_mode == 'late_fusion':
-            # Ghép numeric và categorical (đã encoded) thành 1 vector duy nhất
             meta_vec = torch.cat([meta_num, meta_cat.float()], dim=0)
             return img, (meta_vec, torch.zeros(0)), label
 
