@@ -73,6 +73,14 @@ def main(config):
     device = torch.device(config['DEVICE'])
     os.makedirs(config['MODEL_OUT'], exist_ok=True)
     
+    print("="*50)
+    print(f" Thiết bị đang sử dụng: {device}")
+    if device.type == 'cuda':
+        print(f" CUDA ")
+    else:
+        print(" CẢNH BÁO: Đang chạy bằng CPU.")
+    print("="*50)
+
     # 1. Load Data từ các tệp CSV đã chia sẵn
     print(f" Đang tải dữ liệu HAM10000...")
     train_df = pd.read_csv(config['TRAIN_CSV'])
