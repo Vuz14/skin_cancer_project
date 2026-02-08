@@ -17,27 +17,28 @@ from src.utils.trainer import train_loop
 
 # ------------------- CONFIG -------------------
 CONFIG = {
-    'TRAIN_CSV': r'D:\skin_cancer_project\dataset\metadata\bcn20000_train.csv',
-    'VAL_CSV': r'D:\skin_cancer_project\dataset\metadata\bcn20000_val.csv',
-    'TEST_CSV': r'D:\skin_cancer_project\dataset\metadata\bcn20000_test.csv',
-    'IMG_ROOT': r'D:\skin_cancer_project\dataset\Bcn20000-preprocessed',
-    'MODEL_OUT': r'D:\skin_cancer_project\checkpoint_bcn20000',
+    'TRAIN_CSV': '/mnt/d/skin_cancer_project/dataset/metadata/bcn20000_train.csv',
+    'VAL_CSV': '/mnt/d/skin_cancer_project/dataset/metadata/bcn20000_val.csv',
+    'TEST_CSV': '/mnt/d/skin_cancer_project/dataset/metadata/bcn20000_test.csv',
+    'IMG_ROOT': '/mnt/d/skin_cancer_project/dataset/Bcn20000-preprocessed',
+    'MODEL_OUT': '/mnt/d/skin_cancer_project/checkpoint_bcn20000',
     'DEVICE': 'cuda' if torch.cuda.is_available() else 'cpu', 
     'SEED': 42, 
-    'IMG_SIZE': 224, 
-    'BATCH_SIZE': 16, 
+    'IMG_SIZE': 384,
+    'BATCH_SIZE': 16,
+    'MODEL_NAME': 'resnet50',
     
     'EPOCHS': 20,           
-    'BASE_LR': 5e-5,        
+    'BASE_LR': 1e-5,
     'WARMUP_EPOCHS': 3,     
-    'WEIGHT_DECAY': 1e-4,   
+    'WEIGHT_DECAY': 1e-2,
     # --------------------------------------------------
 
     'METADATA_MODE': 'full_weighted', 
     'METADATA_FEATURE_BOOST': 5.0,
     'META_CLASS_WEIGHT_BOOST': 2.0, 
     'PRETRAINED': True, 
-    'FINE_TUNE_MODE': 'partial_unfreeze',
+    'FINE_TUNE_MODE': 'full_unfreeze',
     'ACCUM_STEPS': 1,
     'SHAP_THRESHOLD': 0.005, 
     'NSAMPLES_SHAP': 50       

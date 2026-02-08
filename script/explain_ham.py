@@ -8,24 +8,24 @@ import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
 
 # --- THÊM ĐƯỜNG DẪN SRC ---
-sys.path.append(os.path.join(os.path.dirname(__file__), 'D:\skin_cancer_project'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '/mnt/d/skin_cancer_project'))
 
 from src.data_logic.ham_dataset import HAM10000Dataset
 from src.models import get_model
 
 # ------------------- CONFIG (Đồng bộ với train_ham mới) -------------------
 TEST_CONFIG = {
-    # Sử dụng file test đã chia sẵn để giải thích
-    'TEST_CSV': r'D:\skin_cancer_project\dataset\metadata\ham10000_test.csv',
-    # Cần file train để lấy thông tin encoders (Mean/Std, LabelEncoder)
-    'TRAIN_CSV': r'D:\skin_cancer_project\dataset\metadata\ham10000_train.csv',
-    'IMG_ROOT': r'D:\skin_cancer_project\dataset\Ham10000-preprocessed',
-    'MODEL_OUT': r'D:\skin_cancer_project\checkpoint_ham10000',
+    'TRAIN_CSV': '/mnt/d/skin_cancer_project/dataset/metadata/bcn20000_train.csv',
+    'VAL_CSV': '/mnt/d/skin_cancer_project/dataset/metadata/bcn20000_val.csv',
+    'TEST_CSV': '/mnt/d/skin_cancer_project/dataset/metadata/bcn20000_test.csv',
+    'IMG_ROOT': '/mnt/d/skin_cancer_project/dataset/Bcn20k',
+    'MODEL_OUT': '/mnt/d/skin_cancer_project/checkpoint_bcn20000',
     'DEVICE': 'cuda' if torch.cuda.is_available() else 'cpu',
     'IMG_SIZE': 224,
     'METADATA_MODE': 'full_weighted',
     'SEED': 42,
-    'NSAMPLES_SHAP': 50, 
+    'NSAMPLES_SHAP': 50,
+    'MODEL_NAME': 'resnet50',
     'SELECTED_FEATURES': None # Danh sách biến nếu bạn đã lọc lúc train
 }
 

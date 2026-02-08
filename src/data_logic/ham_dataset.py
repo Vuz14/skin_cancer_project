@@ -7,6 +7,7 @@ from torchvision import transforms
 from PIL import Image
 from typing import Dict, Tuple, Optional
 from sklearn.preprocessing import LabelEncoder
+import random
 
 def identity(x):
     return x
@@ -100,11 +101,35 @@ class HAM10000Dataset(Dataset):
         return len(self.df)
 
     def _load_image(self, path):
-        full_path = os.path.join(self.img_root, path)
+        # Lấy tên file chuẩn (ví dụ: ISIC_0027419.jpg)
+        fname = os.path.basename(path)
+        if not fname.endswith('.jpg'):
+            fname += '.jpg'
+
+        # --- LOGIC DATA MIXING (Quan trọng) ---
+        if self.train:
+            # Lúc Train: Tung đồng xu
+            # 50% cơ hội lấy ảnh 'roi_' (để học chi tiết vết bệnh)
+            # 50% cơ hội lấy ảnh 'clean_' (để học bối cảnh da xung quanh)
+            prefix = 'clean_' if random.random() < 0.5 else 'roi_'
+        else:
+            # Lúc Val/Test: LUÔN LUÔN dùng ảnh 'clean_' (ảnh chuẩn) để đánh giá
+            prefix = 'clean_'
+
+        # Ghép đường dẫn: IMG_ROOT/clean_ISIC_xxxx.jpg
+        new_fname = prefix + fname
+        full_path = os.path.join(self.img_root, new_fname)
+
+        # --- FALLBACK (Phòng hờ lỗi thiếu file) ---
         if not os.path.exists(full_path):
-            full_path = os.path.join(self.img_root, os.path.basename(path))
-            if not full_path.endswith('.jpg'):
-                full_path += '.jpg'
+            # Nếu không tìm thấy file 'roi', thử tìm file 'clean' (hoặc ngược lại)
+            alt_prefix = 'roi_' if prefix == 'clean_' else 'clean_'
+            full_path = os.path.join(self.img_root, alt_prefix + fname)
+
+            # Nếu vẫn không thấy file nào đã xử lý, đành quay về file gốc
+            if not os.path.exists(full_path):
+                full_path = os.path.join(self.img_root, fname)
+
         with Image.open(full_path) as img:
             return img.convert("RGB")
 

@@ -17,28 +17,30 @@ from src.utils.trainer import train_loop
 
 # ------------------- CONFIG -------------------
 CONFIG = {
-    'TRAIN_CSV': r'D:\skin_cancer_project\dataset\metadata\ham10000_train.csv',
-    'VAL_CSV': r'D:\skin_cancer_project\dataset\metadata\ham10000_val.csv',
-    'TEST_CSV': r'D:\skin_cancer_project\dataset\metadata\ham10000_test.csv',
-    'IMG_ROOT': r'D:\skin_cancer_project\dataset\Ham10000-preprocessed',
-    'MODEL_OUT': r'D:\skin_cancer_project\checkpoint_ham10000',
+    'TRAIN_CSV': '/mnt/d/skin_cancer_project/dataset/metadata/ham10000_train.csv',
+    'VAL_CSV': '/mnt/d/skin_cancer_project/dataset/metadata/ham10000_val.csv',
+    'TEST_CSV': '/mnt/d/skin_cancer_project/dataset/metadata/ham10000_test.csv',
+    'IMG_ROOT': '/mnt/d/skin_cancer_project/dataset/Ham10000-preprocessed',
+    'MODEL_OUT':  '/mnt/d/skin_cancer_project/checkpoint_ham10000',
     'DEVICE': 'cuda' if torch.cuda.is_available() else 'cpu', 
     'SEED': 42, 
-    'IMG_SIZE': 224, 
-    'BATCH_SIZE': 16, 
+    'IMG_SIZE': 384,
+    'BATCH_SIZE': 16,
+    'MODEL_NAME': 'resnet50',
 
     # --- CẬP NHẬT CHIẾN LƯỢC HỌC (STRATEGY) ---
+
     'EPOCHS': 20,           # Tăng lên 20 để hội tụ sâu hơn
-    'BASE_LR': 8e-5,        # Giảm mạnh (từ 5e-4 xuống 8e-5) để Loss mượt hơn
+    'BASE_LR': 1e-5,        # Giảm mạnh (từ 5e-4 xuống 8e-5) để Loss mượt hơn
     'WARMUP_EPOCHS': 3,     # Tăng Warmup lên 3 epoch đầu
-    'WEIGHT_DECAY': 1e-3,   # Tăng Weight Decay để chống Overfit mạnh hơn
+    'WEIGHT_DECAY': 1e-2,   # Tăng Weight Decay để chống Overfit mạnh hơn
     # ------------------------------------------
 
-    'METADATA_MODE': 'full_weighted', 
+    'METADATA_MODE': 'full_weighted',
     'METADATA_FEATURE_BOOST': 5.0,
     'PRETRAINED': True, 
-    'FINE_TUNE_MODE': 'partial_unfreeze',
-    'UNFREEZE_SUBSTRINGS': ['layers', 'blocks', 'norm', 'conv_head', 'features', 'stem'],
+    'FINE_TUNE_MODE': 'full_unfreeze',
+    'UNFREEZE_SUBSTRINGS': [],
     'USE_SAMPLER': True,
     'ACCUM_STEPS': 1,
     'SHAP_THRESHOLD': 0.005, 

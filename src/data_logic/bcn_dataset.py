@@ -7,6 +7,7 @@ from torchvision import transforms
 from PIL import Image
 from typing import Dict, Tuple, Optional
 from sklearn.preprocessing import LabelEncoder
+import random
 
 def identity(x):
     return x
@@ -97,9 +98,33 @@ class DermoscopyDataset(Dataset):
         return len(self.df)
 
     def _load_image(self, path):
-        full_path = os.path.join(self.img_root, path)
+        # Lấy tên file chuẩn
+        fname = os.path.basename(path)
+        if not fname.endswith('.jpg'):
+            fname += '.jpg'
+
+        # --- LOGIC DATA MIXING (BCN20000) ---
+        if self.train:
+            # Tung đồng xu: 50% Clean, 50% ROI
+            prefix = 'clean_' if random.random() < 0.5 else 'roi_'
+        else:
+            # Val/Test: Luôn dùng ảnh Clean chuẩn
+            prefix = 'clean_'
+
+        # Ghép đường dẫn: IMG_ROOT/clean_ISIC_xxxx.jpg
+        new_fname = prefix + fname
+        full_path = os.path.join(self.img_root, new_fname)
+
+        # --- FALLBACK ---
         if not os.path.exists(full_path):
-            full_path = os.path.join(self.img_root, os.path.basename(path))
+            # Tìm file thay thế nếu thiếu
+            alt_prefix = 'roi_' if prefix == 'clean_' else 'clean_'
+            full_path = os.path.join(self.img_root, alt_prefix + fname)
+
+            # Vẫn không thấy thì lấy file gốc
+            if not os.path.exists(full_path):
+                full_path = os.path.join(self.img_root, fname)
+
         with Image.open(full_path) as img:
             return img.convert("RGB")
 
