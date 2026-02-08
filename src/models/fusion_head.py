@@ -1,139 +1,96 @@
 import torch
 import torch.nn as nn
-from typing import Optional, Dict
-from .backbone.efficientnetB4 import EfficientNetBackbone
-from .backbone.resnet50 import ResNet50Backbone
 
-class EfficientNetB4_Multimodal(nn.Module):
-    def __init__(self, pretrained=True, cat_cardinalities: Optional[Dict[str, int]] = None, num_numeric=0, emb_dim=8,
-                 num_classes=1, use_metadata=True, meta_weight=1.0):
-        super().__init__()
-        self.use_metadata = use_metadata
+
+class FusionHead(nn.Module):
+    def __init__(self, num_numeric, num_categorical, cat_cardinalities, input_dim, hidden_dim=512, output_dim=1,
+                 metadata_feature_boost=1.0):
+        """
+        Fusion Head: Module chuyên trách kết hợp đặc trưng hình ảnh và Metadata.
+        """
+        super(FusionHead, self).__init__()
+
+        # 1. Xử lý Metadata (Categorical + Numeric)
         self.num_numeric = num_numeric
-        self.cat_cardinalities = cat_cardinalities or {}
-        self.emb_dim = emb_dim
-        self.meta_weight = meta_weight
+        self.num_categorical = num_categorical
+        self.metadata_feature_boost = metadata_feature_boost
 
-        self.backbone = EfficientNetBackbone('tf_efficientnet_b4_ns', pretrained)
-        self.img_features_dim = self.backbone.num_features
+        # Embedding cho Categorical Features
+        # Tạo danh sách các lớp Embedding dựa trên số lượng giá trị (cardinality) của từng biến
+        self.embeddings = nn.ModuleList([
+            nn.Embedding(cardinality + 1, min(50, (cardinality + 1) // 2))
+            for cardinality in cat_cardinalities
+        ])
 
-        self.cat_names = list(self.cat_cardinalities.keys())
-        self.emb_layers = nn.ModuleDict()
-        total_emb_dim = 0
-        for cname in self.cat_names:
-            card = int(self.cat_cardinalities[cname])
-            d = min(self.emb_dim, max(2, int(card ** 0.5)))
-            self.emb_layers[cname] = nn.Embedding(card, d)
-            total_emb_dim += d
+        # Tính tổng kích thước vector sau khi embed
+        self.emb_out_dim = sum([emb.embedding_dim for emb in self.embeddings])
 
-        if use_metadata:
-            input_meta_dim = total_emb_dim + max(0, num_numeric)
-            self.metadata_mlp = nn.Sequential(
-                nn.Linear(input_meta_dim, 64), nn.BatchNorm1d(64), nn.ReLU(), nn.Dropout(0.5),
-                nn.Linear(64, 32), nn.ReLU()
-            )
-            self.classifier = nn.Sequential(
-                nn.Linear(self.img_features_dim + 32, 256), nn.ReLU(), nn.Dropout(0.5),
-                nn.Linear(256, num_classes)
-            )
-        else:
-            self.metadata_mlp = None
-            self.classifier = nn.Sequential(
-                nn.Linear(self.img_features_dim, 256), nn.ReLU(), nn.Dropout(0.5),
-                nn.Linear(256, num_classes)
-            )
+        # MLP cho Metadata (Numeric + Categorical)
+        self.meta_in_dim = self.emb_out_dim + num_numeric
+        self.meta_out_dim = 64  # Kích thước vector metadata mong muốn
 
-    def forward(self, x_img, meta_num=None, meta_cat=None):
-        if x_img.dtype == torch.float16: x_img = x_img.float()
-        feat_img = self.backbone(x_img)
-        if self.use_metadata and (meta_num is not None and meta_cat is not None):
-            emb_list = [self.emb_layers[c](meta_cat[:, i]) for i, c in enumerate(self.cat_names)]
-            emb_concat = torch.cat(emb_list, dim=1) if emb_list else torch.zeros((feat_img.size(0), 0), device=feat_img.device)
-            meta_input = torch.cat([meta_num, emb_concat], dim=1) if self.num_numeric > 0 else emb_concat
-            if meta_input.dtype == torch.float16: meta_input = meta_input.float()
-            feat_meta = self.metadata_mlp(meta_input) * self.meta_weight
-            feat = torch.cat([feat_img, feat_meta], dim=1)
-        else:
-            feat = feat_img
-        return self.classifier(feat)
-
-class DualEmbeddingFusion(nn.Module):
-    def __init__(self, pretrained=True, cat_cardinalities=None, num_numeric=0, num_classes=1, embed_dim=256):
-        super().__init__()
-        self.backbone = EfficientNetBackbone('tf_efficientnet_b4_ns', pretrained)
-        self.img_dim = self.backbone.num_features 
-        self.meta_dim = num_numeric + len(cat_cardinalities)
-        self.meta_embed = nn.Sequential(nn.Linear(self.meta_dim, 128), nn.ReLU(), nn.Linear(128, embed_dim))
-        self.img_embed = nn.Linear(self.img_dim, embed_dim)
-        self.gate = nn.Sequential(nn.Linear(embed_dim * 2, embed_dim), nn.ReLU(), nn.Linear(embed_dim, 1))
-        self.classifier = nn.Sequential(nn.Linear(embed_dim, 128), nn.ReLU(), nn.Dropout(0.3), nn.Linear(128, num_classes))
-
-    def forward(self, x_img, meta_vec):
-        img_feat = self.backbone(x_img)
-        img_emb = self.img_embed(img_feat)
-        meta_emb = self.meta_embed(meta_vec)
-        gate_val = torch.sigmoid(self.gate(torch.cat([img_emb, meta_emb], dim=1)))
-        fusion = gate_val * img_emb + (1 - gate_val) * meta_emb
-        return self.classifier(fusion)
-
-
-class ResNet50_Multimodal(nn.Module):
-    def __init__(self, pretrained=True, cat_cardinalities=None, num_numeric=0, emb_dim=8,
-                 num_classes=1, use_metadata=True, meta_weight=1.0):
-        super().__init__()
-        self.use_metadata = use_metadata
-        self.num_numeric = num_numeric
-        self.cat_cardinalities = cat_cardinalities or {}
-        self.emb_dim = emb_dim
-        self.meta_weight = meta_weight
-
-        # --- THAY ĐỔI Ở ĐÂY: Dùng ResNet50Backbone ---
-        self.backbone = ResNet50Backbone('resnet50', pretrained)
-        self.img_features_dim = self.backbone.num_features  # Tự động lấy số channels (2048)
-
-        # Phần xử lý Metadata giữ nguyên logic cũ
-        self.cat_names = list(self.cat_cardinalities.keys())
-        self.emb_layers = nn.ModuleDict()
-        total_emb_dim = 0
-        for cname in self.cat_names:
-            card = int(self.cat_cardinalities[cname])
-            d = min(self.emb_dim, max(2, int(card ** 0.5)))
-            self.emb_layers[cname] = nn.Embedding(card, d)
-            total_emb_dim += d
-
-        if use_metadata:
-            input_meta_dim = total_emb_dim + max(0, num_numeric)
-            self.metadata_mlp = nn.Sequential(
-                nn.Linear(input_meta_dim, 64), nn.BatchNorm1d(64), nn.ReLU(), nn.Dropout(0.5),
-                nn.Linear(64, 32), nn.ReLU()
-            )
-            # Input của Classifier = img_features (2048) + meta_features (32)
-            self.classifier = nn.Sequential(
-                nn.Linear(self.img_features_dim + 32, 256), nn.ReLU(), nn.Dropout(0.5),
-                nn.Linear(256, num_classes)
+        if self.meta_in_dim > 0:
+            self.meta_mlp = nn.Sequential(
+                nn.Linear(self.meta_in_dim, 128),
+                nn.BatchNorm1d(128),
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(128, self.meta_out_dim),
+                nn.BatchNorm1d(self.meta_out_dim),
+                nn.ReLU()
             )
         else:
-            self.metadata_mlp = None
-            self.classifier = nn.Sequential(
-                nn.Linear(self.img_features_dim, 256), nn.ReLU(), nn.Dropout(0.5),
-                nn.Linear(256, num_classes)
-            )
+            self.meta_mlp = None
+            self.meta_out_dim = 0
 
-    def forward(self, x_img, meta_num=None, meta_cat=None):
-        if x_img.dtype == torch.float16: x_img = x_img.float()
-        feat_img = self.backbone(x_img)
+        # 2. Fusion Layer (Image Features + Metadata Features)
+        # Input dim = Image Features (từ Backbone) + Metadata Features (từ MLP)
+        self.final_in_dim = input_dim + self.meta_out_dim
 
-        if self.use_metadata and (meta_num is not None and meta_cat is not None):
-            emb_list = [self.emb_layers[c](meta_cat[:, i]) for i, c in enumerate(self.cat_names)]
-            emb_concat = torch.cat(emb_list, dim=1) if emb_list else torch.zeros((feat_img.size(0), 0),
-                                                                                 device=feat_img.device)
+        self.classifier = nn.Sequential(
+            nn.Linear(self.final_in_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(0.4),
+            nn.Linear(hidden_dim, output_dim)
+        )
 
-            meta_input = torch.cat([meta_num, emb_concat], dim=1) if self.num_numeric > 0 else emb_concat
-            if meta_input.dtype == torch.float16: meta_input = meta_input.float()
+    def forward(self, img_features, meta_num=None, meta_cat=None):
+        """
+        Args:
+            img_features: (Batch, Input_Dim) - Vector đặc trưng ảnh đã qua CBAM và Pooling
+            meta_num: (Batch, Num_Numeric) - Metadata dạng số
+            meta_cat: (Batch, Num_Categorical) - Metadata dạng phân loại
+        """
 
-            feat_meta = self.metadata_mlp(meta_input) * self.meta_weight
-            feat = torch.cat([feat_img, feat_meta], dim=1)
+        # --- NHÁNH METADATA ---
+        meta_repr = []
+
+        # 1. Embed categorical
+        if self.num_categorical > 0 and meta_cat is not None:
+            for i, emb in enumerate(self.embeddings):
+                # Clamp để đảm bảo index không vượt quá giới hạn (an toàn)
+                val = meta_cat[:, i].clamp(0, emb.num_embeddings - 1)
+                meta_repr.append(emb(val))
+
+        # 2. Nối với numeric
+        if self.num_numeric > 0 and meta_num is not None:
+            meta_repr.append(meta_num)
+
+        # 3. Qua MLP để tạo vector đặc trưng metadata
+        if len(meta_repr) > 0 and self.meta_mlp is not None:
+            meta_vec = torch.cat(meta_repr, dim=1)
+            meta_features = self.meta_mlp(meta_vec)
+            # Boost metadata (tăng cường tín hiệu metadata nếu cần)
+            meta_features = meta_features * self.metadata_feature_boost
         else:
-            feat = feat_img
+            meta_features = None
 
-        return self.classifier(feat)
+        # --- FUSION & CLASSIFY ---
+        if meta_features is not None:
+            # Nối (Concatenate) đặc trưng ảnh và metadata
+            combined = torch.cat((img_features, meta_features), dim=1)
+        else:
+            combined = img_features
+
+        return self.classifier(combined)

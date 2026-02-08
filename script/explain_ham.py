@@ -19,7 +19,7 @@ TEST_CONFIG = {
     'VAL_CSV': '/mnt/d/skin_cancer_project/dataset/metadata/bcn20000_val.csv',
     'TEST_CSV': '/mnt/d/skin_cancer_project/dataset/metadata/bcn20000_test.csv',
     'IMG_ROOT': '/mnt/d/skin_cancer_project/dataset/Bcn20k',
-    'MODEL_OUT': '/mnt/d/skin_cancer_project/checkpoint_bcn20000',
+    'MODEL_OUT': '/mnt/d/skin_cancer_project/checkpoint_ResNet50_bcn20000',
     'DEVICE': 'cuda' if torch.cuda.is_available() else 'cpu',
     'IMG_SIZE': 224,
     'METADATA_MODE': 'full_weighted',

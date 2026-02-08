@@ -6,6 +6,12 @@ import pandas as pd
 import numpy as np
 from torch.utils.data import DataLoader
 from sklearn.utils.class_weight import compute_class_weight
+from sklearn.feature_selection import RFECV
+from sklearn.model_selection import StratifiedKFold
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import LabelEncoder
+import matplotlib.pyplot as plt
 
 # Thêm đường dẫn gốc của dự án
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -21,7 +27,7 @@ CONFIG = {
     'VAL_CSV': '/mnt/d/skin_cancer_project/dataset/metadata/bcn20000_val.csv',
     'TEST_CSV': '/mnt/d/skin_cancer_project/dataset/metadata/bcn20000_test.csv',
     'IMG_ROOT': '/mnt/d/skin_cancer_project/dataset/Bcn20000-preprocessed',
-    'MODEL_OUT': '/mnt/d/skin_cancer_project/checkpoint_bcn20000',
+    'MODEL_OUT': '/mnt/d/skin_cancer_project/checkpoint_ResNet50_bcn20000',
     'DEVICE': 'cuda' if torch.cuda.is_available() else 'cpu', 
     'SEED': 42, 
     'IMG_SIZE': 384,
@@ -92,7 +98,7 @@ def main(config):
     test_df = preprocess_bcn(pd.read_csv(config['TEST_CSV']))
 
     # 2. SHAP Selection
-    important_features = auto_feature_selection(train_df, config, device)
+    important_features = advanced_feature_selection_rfe(train_df, config, device)
 
     # 3. Khởi tạo Datasets & Loaders
     train_ds = DermoscopyDataset(train_df, config['IMG_ROOT'], config['IMG_SIZE'], 
@@ -138,6 +144,55 @@ def main(config):
         device, 
         log_suffix="bcn_final_enhanced"
     )
+
+
+def advanced_feature_selection_rfe(train_df, config, device):
+    print("\n🔍 --- GIAI ĐOẠN: CHỌN LỌC ĐẶC TRƯNG NÂNG CAO (RFECV) - BCN20000 ---")
+
+    # 1. Chuẩn bị dữ liệu metadata
+    # Lưu ý: Dùng DermoscopyDataset (class của BCN)
+    temp_ds = DermoscopyDataset(train_df, config['IMG_ROOT'], config['IMG_SIZE'], config['METADATA_MODE'], train=False)
+    all_cols = temp_ds.numeric_cols + temp_ds.categorical_cols
+
+    X = train_df[all_cols].copy()
+    y = train_df['label'].values
+
+    # Xử lý dữ liệu thiếu
+    if temp_ds.numeric_cols:
+        num_imputer = SimpleImputer(strategy='mean')
+        X[temp_ds.numeric_cols] = num_imputer.fit_transform(X[temp_ds.numeric_cols])
+
+    for col in temp_ds.categorical_cols:
+        X[col] = X[col].fillna('unknown').astype(str)
+        le = LabelEncoder()
+        X[col] = le.fit_transform(X[col])
+
+    # 2. Chạy RFECV
+    print("🤖 Đang chạy RFE... (Tìm tập hợp biến tối ưu cho BCN)")
+    rf = RandomForestClassifier(n_estimators=100, random_state=config['SEED'], n_jobs=-1)
+    cv = StratifiedKFold(n_splits=5)
+
+    # step=1: Loại từng biến một.
+    selector = RFECV(estimator=rf, step=1, cv=cv, scoring='accuracy', min_features_to_select=3, n_jobs=-1)
+    selector = selector.fit(X, y)
+
+    # 3. Kết quả
+    selected_mask = selector.support_
+    selected_features = np.array(all_cols)[selected_mask].tolist()
+
+    print(f"📊 Số lượng biến tối ưu: {selector.n_features_}/{len(all_cols)}")
+    print(f"✅ QUYẾT ĐỊNH GIỮ LẠI: {selected_features}")
+
+    # Vẽ biểu đồ
+    plt.figure(figsize=(10, 6))
+    plt.xlabel("Số lượng đặc trưng được chọn")
+    plt.ylabel("Độ chính xác (CV Score)")
+    plt.plot(range(1, len(selector.cv_results_['mean_test_score']) + 1), selector.cv_results_['mean_test_score'])
+    plt.title("RFE Performance - BCN20000")
+    plt.grid(True)
+    plt.savefig(os.path.join(config['MODEL_OUT'], "rfe_performance_bcn.png"))
+
+    return selected_features
 
 if __name__ == '__main__':
     main(CONFIG)

@@ -5,6 +5,12 @@ import torch.nn as nn
 import pandas as pd
 import numpy as np
 from torch.utils.data import DataLoader, WeightedRandomSampler
+from sklearn.feature_selection import RFECV
+from sklearn.model_selection import StratifiedKFold
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.preprocessing import LabelEncoder
+import matplotlib.pyplot as plt
 
 # Thêm đường dẫn gốc của project
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -21,7 +27,7 @@ CONFIG = {
     'VAL_CSV': '/mnt/d/skin_cancer_project/dataset/metadata/ham10000_val.csv',
     'TEST_CSV': '/mnt/d/skin_cancer_project/dataset/metadata/ham10000_test.csv',
     'IMG_ROOT': '/mnt/d/skin_cancer_project/dataset/Ham10000-preprocessed',
-    'MODEL_OUT':  '/mnt/d/skin_cancer_project/checkpoint_ham10000',
+    'MODEL_OUT':  '/mnt/d/skin_cancer_project/checkpoint_ResNet50_ham10000',
     'DEVICE': 'cuda' if torch.cuda.is_available() else 'cpu', 
     'SEED': 42, 
     'IMG_SIZE': 384,
@@ -89,7 +95,7 @@ def main(config):
             df['label'] = df['dx'].apply(lambda x: 1 if x in ['mel', 'bcc', 'akiec'] else 0)
     
     # 2. SHAP Selection
-    important_features = auto_feature_selection_ham(train_df, config, device)
+    important_features = advanced_feature_selection_rfe(train_df, config, device)
 
     # 3. Khởi tạo Datasets (Với bộ Strong Augmentation đã cập nhật trong ham_dataset.py)
     train_ds = HAM10000Dataset(train_df, config['IMG_ROOT'], config['IMG_SIZE'], 
@@ -140,6 +146,55 @@ def main(config):
         device, 
         log_suffix="ham10k_final_enhanced"
     )
+
+def advanced_feature_selection_rfe(train_df, config, device):
+    print("\n🔍 --- GIAI ĐOẠN: CHỌN LỌC ĐẶC TRƯNG NÂNG CAO (RFECV) ---")
+
+    # 1. Chuẩn bị dữ liệu metadata
+    # Lưu ý: train=False để dataset không trộn ảnh clean/roi lung tung lúc này
+    temp_ds = HAM10000Dataset(train_df, config['IMG_ROOT'], config['IMG_SIZE'], config['METADATA_MODE'], train=False)
+    all_cols = temp_ds.numeric_cols + temp_ds.categorical_cols
+
+    X = train_df[all_cols].copy()
+    y = train_df['label'].values
+
+    # Xử lý dữ liệu thiếu (Imputation)
+    if temp_ds.numeric_cols:
+        num_imputer = SimpleImputer(strategy='mean')
+        X[temp_ds.numeric_cols] = num_imputer.fit_transform(X[temp_ds.numeric_cols])
+
+    for col in temp_ds.categorical_cols:
+        X[col] = X[col].fillna('unknown').astype(str)
+        le = LabelEncoder()
+        X[col] = le.fit_transform(X[col])
+
+    # 2. Chạy RFECV (Recursive Feature Elimination with Cross-Validation)
+    print("🤖 Đang chạy RFE... (Quá trình này tìm tập hợp biến tối ưu nhất)")
+    rf = RandomForestClassifier(n_estimators=100, random_state=config['SEED'], n_jobs=-1)
+    cv = StratifiedKFold(n_splits=5) # 5-Fold để đảm bảo khách quan
+
+    # step=1: Loại từng biến một. min_features_to_select=3: Giữ ít nhất 3 biến
+    selector = RFECV(estimator=rf, step=1, cv=cv, scoring='accuracy', min_features_to_select=3, n_jobs=-1)
+    selector = selector.fit(X, y)
+
+    # 3. Lấy kết quả
+    selected_mask = selector.support_
+    selected_features = np.array(all_cols)[selected_mask].tolist()
+
+    print(f"📊 Số lượng biến tối ưu: {selector.n_features_}/{len(all_cols)}")
+    print(f"✅ QUYẾT ĐỊNH GIỮ LẠI: {selected_features}")
+
+    # Vẽ biểu đồ hiệu năng (Quan trọng cho bài báo)
+    plt.figure(figsize=(10, 6))
+    plt.xlabel("Số lượng đặc trưng được chọn")
+    plt.ylabel("Độ chính xác (Cross Validation Score)")
+    plt.plot(range(1, len(selector.cv_results_['mean_test_score']) + 1), selector.cv_results_['mean_test_score'])
+    plt.title("Hiệu năng mô hình theo số lượng Metadata")
+    plt.grid(True)
+    plt.savefig(os.path.join(config['MODEL_OUT'], "rfe_performance.png"))
+    print("📈 Đã lưu biểu đồ RFE vào folder checkpoint.")
+
+    return selected_features
 
 if __name__ == '__main__':
     main(CONFIG)
