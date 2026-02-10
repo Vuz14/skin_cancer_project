@@ -11,6 +11,7 @@ from sklearn.metrics import accuracy_score, f1_score, recall_score, precision_sc
 # Kiểm tra thư viện Grad-CAM
 try:
     from pytorch_grad_cam import GradCAM
+    from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
     from pytorch_grad_cam.utils.image import show_cam_on_image
     HAS_GRADCAM = True
 except ImportError:
@@ -20,35 +21,109 @@ def calculate_specificity(y_true, y_pred):
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel() if len(set(y_true)) > 1 else (0, 0, 0, 0)
     return tn / (tn + fp + 1e-12) if (tn + fp) > 0 else 0.0
 
+# Cập nhật trong src/utils/trainer.py
+
 def generate_gradcam(model, img_tensor, save_dir, idx):
     """
-    Tạo và lưu ảnh Grad-CAM cho phần Backbone hình ảnh.
-    Sửa lỗi: Phải bật requires_grad và không chạy trong no_grad.
+    Generate and save Grad-CAM visualization.
+    FIXED VERSION:
+    - Không bắt layer quá sâu
+    - Ưu tiên spatial feature (blocks[-2].conv_dw)
     """
     model.eval()
     device = next(model.parameters()).device
-    
-    # Truy cập vào layer cuối của backbone EfficientNet
+
+    # -------- 1. Wrapper: image-only forward (fake metadata) --------
+    class _ImageOnlyWrapper(nn.Module):
+        def __init__(self, base_model):
+            super().__init__()
+            self.base_model = base_model
+
+        def forward(self, x):
+            bs = x.size(0)
+            dev = x.device
+
+            num_numeric = getattr(self.base_model, 'num_numeric', 0)
+            cat_dim = len(getattr(self.base_model, 'cat_names', []))
+            if cat_dim == 0 and hasattr(self.base_model, 'cat_cardinalities'):
+                cat_dim = len(self.base_model.cat_cardinalities)
+
+            meta_num = torch.zeros((bs, num_numeric), device=dev)
+            meta_cat = torch.zeros((bs, cat_dim), dtype=torch.long, device=dev)
+
+            return self.base_model(x, meta_num, meta_cat)
+
+    # -------- 2. CHỌN TARGET LAYER (KHÔNG QUÁ SÂU) --------
+    layer_name = "unknown"
     try:
-        target_layer = model.backbone.backbone.conv_head 
-    except AttributeError:
-        target_layer = model.backbone.conv_head
-    
-    # Khởi tạo GradCAM
-    cam = GradCAM(model=model.backbone, target_layers=[target_layer])
-    
-    # Quan trọng: Bật requires_grad cho input để tính toán heatmap
-    img_input = img_tensor.to(device).float()
-    img_input.requires_grad = True 
-    
-    # Tính toán CAM (Hàm này thực hiện backward nội bộ nên không được bọc trong no_grad)
-    grayscale_cam = cam(input_tensor=img_input, targets=None)[0]
-    
-    # Chuẩn hóa ảnh gốc để vẽ đè CAM
-    img_np = img_tensor[0].cpu().permute(1, 2, 0).numpy()
-    img_np = (img_np - img_np.min()) / (img_np.max() - img_np.min() + 1e-8)
-    
-    cam_image = show_cam_on_image(img_np, grayscale_cam, use_rgb=True)
+        # 🥇 TỐT NHẤT: block áp chót – conv_dw giữ spatial
+        target_layer = model.backbone.model.blocks[-2][-1].conv_dw
+        layer_name = "blocks[-2][-1].conv_dw"
+    except Exception:
+        try:
+            # 🥈 Fallback: output block áp chót
+            target_layer = model.backbone.model.blocks[-2]
+            layer_name = "blocks[-2]"
+        except Exception:
+            try:
+                # 🥉 Fallback cuối: conv_head
+                target_layer = model.backbone.model.conv_head
+                layer_name = "conv_head"
+            except Exception:
+                print("⚠️ Không tìm thấy layer phù hợp để Grad-CAM")
+                return
+
+    # -------- 3. Init Grad-CAM --------
+    cam_model = _ImageOnlyWrapper(model)
+    cam = GradCAM(
+        model=cam_model,
+        target_layers=[target_layer],
+        use_cuda=(device.type == "cuda")
+    )
+
+    if img_tensor.ndim == 3:
+        img_input = img_tensor.unsqueeze(0)
+    else:
+        img_input = img_tensor
+
+    img_input = img_input.to(device).float()
+    img_input.requires_grad_(True)
+
+    # -------- 4. Run Grad-CAM --------
+    try:
+        grayscale_cam = cam(input_tensor=img_input, targets=None)[0]
+    except Exception as e:
+        print(f"⚠️ Grad-CAM error: {e}")
+        return
+
+    # -------- 5. De-normalize image --------
+    img_np = img_input[0].detach().cpu().permute(1, 2, 0).numpy().astype(np.float32)
+    mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+    std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+
+    img_rgb = np.clip((img_np * std) + mean, 0.0, 1.0)
+
+    # -------- 6. Overlay heatmap --------
+    heatmap = np.uint8(255 * np.clip(grayscale_cam, 0.0, 1.0))
+    heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+    heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+
+    cam_image = 0.6 * img_rgb + 0.4 * heatmap
+    cam_image = np.uint8(255 * np.clip(cam_image, 0.0, 1.0))
+
+    # -------- 7. Annotation --------
+    cv2.putText(
+        cam_image,
+        f"Grad-CAM layer: {layer_name}",
+        (5, 18),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.45,
+        (255, 255, 255),
+        1
+    )
+
+    # -------- 8. Save --------
+    os.makedirs(save_dir, exist_ok=True)
     save_path = os.path.join(save_dir, f"sample_{idx}.png")
     cv2.imwrite(save_path, cv2.cvtColor(cam_image, cv2.COLOR_RGB2BGR))
 
@@ -145,7 +220,10 @@ def train_loop(model, train_loader, val_loader, test_loader, config, criterion, 
                 loss = criterion(logits.view(-1, 1), labels.view(-1, 1) * 0.9 + 0.05)
 
             scaler.scale(loss).backward()
-            scaler.step(optimizer); scaler.update()
+            scaler.unscale_(optimizer) # Cần unscale trước khi clip
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=2.0) 
+            scaler.step(optimizer)
+            scaler.update()
 
         # Đánh giá Metrics cuối mỗi epoch
         train_res = evaluate(model, train_loader, device, is_late_fusion)
@@ -193,6 +271,13 @@ def train_loop(model, train_loader, val_loader, test_loader, config, criterion, 
                     except Exception as e:
                         print(f"⚠️ Grad-CAM failed: {e}")
                 model.train()
+
+
+    # --- Kết thúc Training: load checkpoint tốt nhất rồi đánh giá tập Test ---
+    best_ckpt_path = os.path.join(config['MODEL_OUT'], f"best_{config['METADATA_MODE']}.pt")
+    if os.path.exists(best_ckpt_path):
+        best_ckpt = torch.load(best_ckpt_path, map_location=device)
+        model.load_state_dict(best_ckpt['state_dict'])
 
     # --- Kết thúc Training: Đánh giá tập Test & Vẽ biểu đồ ---
     print("\n🚀 Huấn luyện hoàn tất. Đang đánh giá tập Test...")

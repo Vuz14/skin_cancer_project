@@ -65,7 +65,7 @@ class DualEmbeddingFusion(nn.Module):
         self.meta_embed = nn.Sequential(nn.Linear(self.meta_dim, 128), nn.ReLU(), nn.Linear(128, embed_dim))
         self.img_embed = nn.Linear(self.img_dim, embed_dim)
         self.gate = nn.Sequential(nn.Linear(embed_dim * 2, embed_dim), nn.ReLU(), nn.Linear(embed_dim, 1))
-        self.classifier = nn.Sequential(nn.Linear(embed_dim, 128), nn.ReLU(), nn.Dropout(0.3), nn.Linear(128, num_classes))
+        self.classifier = nn.Sequential(nn.Linear(embed_dim, 128), nn.ReLU(), nn.Dropout(0.5), nn.Linear(128, num_classes))
 
     def forward(self, x_img, meta_vec):
         img_feat = self.backbone(x_img)
