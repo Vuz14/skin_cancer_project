@@ -13,7 +13,7 @@ from src.data_logic.ham_dataset import HAM10000Dataset
 from src.models import get_model
 from src.utils.losses import FocalLoss
 from src.utils.common import seed_everything, get_warmup_cosine_scheduler, set_finetune_mode
-from src.utils.trainer import train_loop
+
 
 # ------------------- CONFIG -------------------
 CONFIG = {
@@ -26,6 +26,7 @@ CONFIG = {
     'SEED': 42, 
     'IMG_SIZE': 224, 
     'BATCH_SIZE': 16, 
+    'BACKBONE': 'convnext',
 
     # --- CẬP NHẬT CHIẾN LƯỢC HỌC (STRATEGY) ---
     'EPOCHS': 20,           # Tăng lên 20 để hội tụ sâu hơn
@@ -44,6 +45,10 @@ CONFIG = {
     'SHAP_THRESHOLD': 0.005, 
     'NSAMPLES_SHAP': 50       
 }
+if CONFIG["BACKBONE"] == "convnext":
+    from src.utils.trainer_convnext import train_loop
+else:
+    from src.utils.trainer import train_loop
 
 def auto_feature_selection_ham(train_df, config, device):
     """Giai đoạn thăm dò: Xác định các biến metadata quan trọng cho HAM10000"""

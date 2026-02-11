@@ -17,6 +17,7 @@ from src.utils.trainer import train_loop
 
 # ------------------- CONFIG -------------------
 CONFIG = {
+    'BACKBONE_TYPE': 'convnext',
     'TRAIN_CSV': r'D:\skin_cancer_project\dataset\metadata\bcn20000_train.csv',
     'VAL_CSV': r'D:\skin_cancer_project\dataset\metadata\bcn20000_val.csv',
     'TEST_CSV': r'D:\skin_cancer_project\dataset\metadata\bcn20000_test.csv',
@@ -26,6 +27,7 @@ CONFIG = {
     'SEED': 42, 
     'IMG_SIZE': 224, 
     'BATCH_SIZE': 16, 
+    'BACKBONE': 'convnext',
     
     'EPOCHS': 20,           
     'BASE_LR': 5e-5,        
@@ -42,7 +44,10 @@ CONFIG = {
     'SHAP_THRESHOLD': 0.005, 
     'NSAMPLES_SHAP': 50       
 }
-
+if CONFIG["BACKBONE"] == "convnext":
+    from src.utils.trainer_convnext import train_loop
+else:
+    from src.utils.trainer import train_loop
 def preprocess_bcn(df):
     """Làm sạch dữ liệu và tạo nhãn chuẩn"""
     df = df.copy()
