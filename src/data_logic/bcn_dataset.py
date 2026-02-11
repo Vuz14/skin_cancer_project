@@ -7,6 +7,8 @@ from torchvision import transforms
 from PIL import Image
 from typing import Dict, Tuple, Optional
 from sklearn.preprocessing import LabelEncoder
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 
 def identity(x):
     return x
@@ -59,39 +61,26 @@ class DermoscopyDataset(Dataset):
                 mean = float(np.nanmean(arr)) if not np.all(np.isnan(arr)) else 0.0
                 std = float(np.nanstd(arr)) + 1e-6 if not np.all(np.isnan(arr)) else 1.0
                 self.num_mean_std[nc] = (mean, std)
+ 
 
         if self.train:
-            self.transform = transforms.Compose([
-                # 1. Resize và Crop ngẫu nhiên mạnh hơn (từ 0.6 thay vì 0.7)
-                transforms.RandomResizedCrop(img_size, scale=(0.6, 1.0)),
-                
-                # 2. Lật xoay đa hướng
-                transforms.RandomHorizontalFlip(p=0.5),
-                transforms.RandomVerticalFlip(p=0.5),
-                transforms.RandomRotation(45), 
-                
-                # 3. Biến dạng hình học: Dịch chuyển và co giãn
-                transforms.RandomAffine(degrees=0, translate=(0.1, 0.1), scale=(0.8, 1.2)),
-                
-                # 4. Thay đổi màu sắc mạnh tay hơn để mô hình không bị phụ thuộc vào sắc độ ảnh
-                transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1),
-                
-                # 5. Làm mờ nhẹ (Gaussian Blur) giúp mô hình bền bỉ với ảnh chất lượng thấp
-                transforms.GaussianBlur(kernel_size=(3, 3), sigma=(0.1, 2.0)),
-                
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-                
-                # 6. ✅ Random Erasing: Xóa ngẫu nhiên các vùng nhỏ (giả lập lông, thước đo, vật cản)
-                transforms.RandomErasing(p=0.3, scale=(0.02, 0.2), ratio=(0.3, 3.3), value=0)
-            ])
+            self.transform = A.Compose([
+                A.Resize(img_size, img_size),
+                A.HorizontalFlip(p=0.5),
+                A.VerticalFlip(p=0.5),
+                A.RandomRotate90(p=0.5),
+                A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.1, rotate_limit=30, p=0.5),
+                A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.5),
+                A.CoarseDropout(max_holes=8, max_height=img_size//10, max_width=img_size//10, p=0.3), # Mạnh hơn RandomErasing
+                A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                ToTensorV2(),
+        ])
         else:
-            # Đối với Validation/Test: Chỉ Resize và Chuẩn hóa
-            self.transform = transforms.Compose([
-                transforms.Resize((img_size, img_size)),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-            ])
+            self.transform = A.Compose([
+                A.Resize(img_size, img_size),
+                A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                ToTensorV2(),
+    ])
 
     def __len__(self):
         return len(self.df)
@@ -125,7 +114,8 @@ class DermoscopyDataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        img = self.transform(self._load_image(row['image_path']))
+        augmented = self.transform(image=np.array(self._load_image(row['image_path'])))
+        img = augmented['image']
         label = torch.tensor(int(row['label']), dtype=torch.float32)
         meta_num, meta_cat = self._encode_metadata(row)
 

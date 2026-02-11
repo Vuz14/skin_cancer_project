@@ -111,9 +111,9 @@ def main(config):
         samples_weights = torch.from_numpy(weights[targets]).double()
         train_sampler = WeightedRandomSampler(samples_weights, len(samples_weights))
 
-    train_loader = DataLoader(train_ds, batch_size=config['BATCH_SIZE'], sampler=train_sampler, num_workers=0)
-    val_loader = DataLoader(val_ds, batch_size=config['BATCH_SIZE'], shuffle=False, num_workers=0)
-    test_loader = DataLoader(test_ds, batch_size=config['BATCH_SIZE'], shuffle=False, num_workers=0)
+    train_loader = DataLoader(train_ds, batch_size=config['BATCH_SIZE'], sampler=train_sampler, num_workers=4)
+    val_loader = DataLoader(val_ds, batch_size=config['BATCH_SIZE'], shuffle=False, num_workers=4)
+    test_loader = DataLoader(test_ds, batch_size=config['BATCH_SIZE'], shuffle=False, num_workers=4)
 
     # 5. Khởi tạo Model
     model = get_model(config, train_ds.cat_cardinalities, len(train_ds.numeric_cols)).to(device)

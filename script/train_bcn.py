@@ -29,20 +29,22 @@ CONFIG = {
     'BATCH_SIZE': 16, 
     'BACKBONE': 'convnext',
     
-    'EPOCHS': 20,           
+    'EPOCHS': 15,           
     'BASE_LR': 5e-5,        
     'WARMUP_EPOCHS': 3,     
-    'WEIGHT_DECAY': 1e-4,   
+    'WEIGHT_DECAY': 1e-3,   
     # --------------------------------------------------
-
-    'METADATA_MODE': 'full_weighted', 
+    'LABEL_SMOOTHING': 0.1,
+    'METADATA_MODE': 'diag1', 
     'METADATA_FEATURE_BOOST': 5.0,
-    'META_CLASS_WEIGHT_BOOST': 2.0, 
+    'META_CLASS_WEIGHT_BOOST': 1.0, 
     'PRETRAINED': True, 
     'FINE_TUNE_MODE': 'partial_unfreeze',
+    'UNFREEZE_KEYWORDS': ['conv_head', 'bn2', 'blocks.6', 'blocks.5', 'blocks.4'],
     'ACCUM_STEPS': 1,
     'SHAP_THRESHOLD': 0.005, 
-    'NSAMPLES_SHAP': 50       
+    'NSAMPLES_SHAP': 50,
+    'USE_AUTO_FEATURE_SELECTION': False,  
 }
 if CONFIG["BACKBONE"] == "convnext":
     from src.utils.trainer_convnext import train_loop
@@ -96,7 +98,10 @@ def main(config):
     test_df = preprocess_bcn(pd.read_csv(config['TEST_CSV']))
 
     # 2. SHAP Selection
-    important_features = auto_feature_selection(train_df, config, device)
+    if config.get('USE_AUTO_FEATURE_SELECTION', False):
+        important_features = auto_feature_selection(train_df, config, device)
+    else:
+        important_features = None
 
     # 3. Khởi tạo Datasets & Loaders
     train_ds = DermoscopyDataset(train_df, config['IMG_ROOT'], config['IMG_SIZE'], 
@@ -106,13 +111,13 @@ def main(config):
     test_ds = DermoscopyDataset(test_df, config['IMG_ROOT'], config['IMG_SIZE'], 
                                 config['METADATA_MODE'], train=False, selected_features=important_features)
 
-    train_loader = DataLoader(train_ds, batch_size=config['BATCH_SIZE'], shuffle=True, num_workers=0)
-    val_loader = DataLoader(val_ds, batch_size=config['BATCH_SIZE'], shuffle=False, num_workers=0)
-    test_loader = DataLoader(test_ds, batch_size=config['BATCH_SIZE'], shuffle=False, num_workers=0)
+    train_loader = DataLoader(train_ds, batch_size=config['BATCH_SIZE'], shuffle=True, num_workers=4)
+    val_loader = DataLoader(val_ds, batch_size=config['BATCH_SIZE'], shuffle=False, num_workers=4)
+    test_loader = DataLoader(test_ds, batch_size=config['BATCH_SIZE'], shuffle=False, num_workers=4)
 
     # 4. Khởi tạo Model
     model = get_model(config, train_ds.cat_cardinalities, len(train_ds.numeric_cols)).to(device)
-    set_finetune_mode(model, config['FINE_TUNE_MODE'])
+    set_finetune_mode(model, config['FINE_TUNE_MODE'], config.get('UNFREEZE_KEYWORDS'))
 
     # Thiết lập Loss với cân bằng trọng số
     y_train = train_df['label'].values
