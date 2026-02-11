@@ -7,6 +7,8 @@ from torchvision import transforms
 from PIL import Image
 from typing import Dict, Tuple, Optional
 from sklearn.preprocessing import LabelEncoder
+import albumentations as A
+from albumentations.pytorch import ToTensorV2
 
 def identity(x):
     return x
@@ -62,23 +64,23 @@ class DermoscopyDataset(Dataset):
  
 
         if self.train:
-            self.transform = transforms.Compose([
-                transforms.Resize((img_size, img_size)),
-                transforms.RandomHorizontalFlip(p=0.5),
-                transforms.RandomVerticalFlip(p=0.2),
-                transforms.RandomRotation(degrees=20),
-                transforms.ColorJitter(brightness=0.15, contrast=0.15, saturation=0.1, hue=0.02),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-                 transforms.RandomErasing(p=0.1, scale=(0.01, 0.05), ratio=(0.7, 1.4), value='random')
-            ])
+            self.transform = A.Compose([
+                A.Resize(img_size, img_size),
+                A.HorizontalFlip(p=0.5),
+                A.VerticalFlip(p=0.5),
+                A.RandomRotate90(p=0.5),
+                A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.1, rotate_limit=30, p=0.5),
+                A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.5),
+                A.CoarseDropout(max_holes=8, max_height=img_size//10, max_width=img_size//10, p=0.3), # Mạnh hơn RandomErasing
+                A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                ToTensorV2(),
+        ])
         else:
-            # Val/Test giữ nguyên
-            self.transform = transforms.Compose([
-                transforms.Resize((img_size, img_size)),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-            ])
+            self.transform = A.Compose([
+                A.Resize(img_size, img_size),
+                A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                ToTensorV2(),
+    ])
 
     def __len__(self):
         return len(self.df)
@@ -112,7 +114,8 @@ class DermoscopyDataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        img = self.transform(self._load_image(row['image_path']))
+        augmented = self.transform(image=np.array(self._load_image(row['image_path'])))
+        img = augmented['image']
         label = torch.tensor(int(row['label']), dtype=torch.float32)
         meta_num, meta_cat = self._encode_metadata(row)
 

@@ -25,14 +25,14 @@ CONFIG = {
     'DEVICE': 'cuda' if torch.cuda.is_available() else 'cpu', 
     'SEED': 42, 
     'IMG_SIZE': 300, 
-    'BATCH_SIZE': 8, 
+    'BATCH_SIZE': 12, 
     
     'EPOCHS': 15,           
-    'BASE_LR': 2e-4,        
+    'BASE_LR': 5e-5,        
     'WARMUP_EPOCHS': 3,     
-    'WEIGHT_DECAY': 1e-2,   
+    'WEIGHT_DECAY': 1e-3,   
     # --------------------------------------------------
-
+    'LABEL_SMOOTHING': 0.1,
     'METADATA_MODE': 'diag1', 
     'METADATA_FEATURE_BOOST': 5.0,
     'META_CLASS_WEIGHT_BOOST': 1.0, 
@@ -42,8 +42,7 @@ CONFIG = {
     'ACCUM_STEPS': 1,
     'SHAP_THRESHOLD': 0.005, 
     'NSAMPLES_SHAP': 50,
-    'USE_AUTO_FEATURE_SELECTION': False,
-    'LABEL_SMOOTHING': 0.0     
+    'USE_AUTO_FEATURE_SELECTION': False,  
 }
 
 def preprocess_bcn(df):
