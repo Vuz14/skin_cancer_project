@@ -2,10 +2,18 @@ import torch
 import torch.nn as nn
 from typing import Optional, Dict
 from .backbone.efficientnetB4 import EfficientNetBackbone
+from .backbone.resnet50 import ResNet50Backbone
 
-class EfficientNetB4_Multimodal(nn.Module):
-    def __init__(self, pretrained=True, cat_cardinalities: Optional[Dict[str, int]] = None, num_numeric=0, emb_dim=8,
-                 num_classes=1, use_metadata=True, meta_weight=1.0):
+import torch
+import torch.nn as nn
+from typing import Optional, Dict
+from .backbone.efficientnetB4 import EfficientNetBackbone
+from .backbone.resnet50 import ResNet50Backbone
+
+
+class MultimodalClassifier(nn.Module):
+    def __init__(self, model_name='resnet50', pretrained=True, cat_cardinalities: Optional[Dict[str, int]] = None,
+                 num_numeric=0, emb_dim=8, num_classes=1, use_metadata=True, meta_weight=1.0):
         super().__init__()
         self.use_metadata = use_metadata
         self.num_numeric = num_numeric
@@ -13,9 +21,15 @@ class EfficientNetB4_Multimodal(nn.Module):
         self.emb_dim = emb_dim
         self.meta_weight = meta_weight
 
-        self.backbone = EfficientNetBackbone('tf_efficientnet_b4_ns', pretrained)
+        # --- LOGIC CHỌN BACKBONE ---
+        if 'resnet' in model_name.lower():
+            self.backbone = ResNet50Backbone(model_name, pretrained)
+        else:
+            self.backbone = EfficientNetBackbone(model_name, pretrained)
+
         self.img_features_dim = self.backbone.num_features
 
+        # --- Phần Embedding & Classifier giữ nguyên như cũ ---
         self.cat_names = list(self.cat_cardinalities.keys())
         self.emb_layers = nn.ModuleDict()
         total_emb_dim = 0
@@ -27,22 +41,20 @@ class EfficientNetB4_Multimodal(nn.Module):
 
         if use_metadata:
             input_meta_dim = total_emb_dim + max(0, num_numeric)
-            # Nhánh metadata: trích xuất đặc trưng lâm sàng
             self.metadata_mlp = nn.Sequential(
-                nn.Linear(input_meta_dim, 128), 
-                nn.BatchNorm1d(128), 
-                nn.ReLU(), 
+                nn.Linear(input_meta_dim, 128),
+                nn.BatchNorm1d(128),
+                nn.ReLU(),
                 nn.Dropout(0.5),
-                nn.Linear(128, 64), 
+                nn.Linear(128, 64),
                 nn.ReLU()
             )
-            # Nhánh Classifier: Kết hợp ảnh và metadata
             self.classifier = nn.Sequential(
-                nn.Linear(self.img_features_dim + 64, 512), 
-                nn.BatchNorm1d(512), 
-                nn.ReLU(), 
+                nn.Linear(self.img_features_dim + 64, 512),
+                nn.BatchNorm1d(512),
+                nn.ReLU(),
                 nn.Dropout(0.5),
-                nn.Linear(512, 128), # Đã sửa lỗi: 512 -> 128
+                nn.Linear(512, 128),
                 nn.ReLU(),
                 nn.Dropout(0.5),
                 nn.Linear(128, num_classes)
@@ -50,8 +62,8 @@ class EfficientNetB4_Multimodal(nn.Module):
         else:
             self.metadata_mlp = None
             self.classifier = nn.Sequential(
-                nn.Linear(self.img_features_dim, 256), 
-                nn.ReLU(), 
+                nn.Linear(self.img_features_dim, 256),
+                nn.ReLU(),
                 nn.Dropout(0.5),
                 nn.Linear(256, num_classes)
             )
@@ -59,22 +71,22 @@ class EfficientNetB4_Multimodal(nn.Module):
     def forward(self, x_img, meta_num=None, meta_cat=None):
         if x_img.dtype == torch.float16: x_img = x_img.float()
         feat_img = self.backbone(x_img)
-        
+
         if self.use_metadata and (meta_num is not None and meta_cat is not None):
-            # Xử lý embedding cho từng cột categorical
             emb_list = [self.emb_layers[c](meta_cat[:, i]) for i, c in enumerate(self.cat_names)]
-            emb_concat = torch.cat(emb_list, dim=1) if emb_list else torch.zeros((feat_img.size(0), 0), device=feat_img.device)
-            
-            # Kết hợp số và category
+            emb_concat = torch.cat(emb_list, dim=1) if emb_list else torch.zeros((feat_img.size(0), 0),
+                                                                                 device=feat_img.device)
+
             meta_input = torch.cat([meta_num, emb_concat], dim=1) if self.num_numeric > 0 else emb_concat
             if meta_input.dtype == torch.float16: meta_input = meta_input.float()
-            
+
             feat_meta = self.metadata_mlp(meta_input) * self.meta_weight
             feat = torch.cat([feat_img, feat_meta], dim=1)
         else:
             feat = feat_img
-            
+
         return self.classifier(feat)
+
 class DualEmbeddingFusion(nn.Module):
     def __init__(self, pretrained=True, cat_cardinalities=None, num_numeric=0, num_classes=1, embed_dim=256):
         super().__init__()
