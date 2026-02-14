@@ -169,6 +169,7 @@ def evaluate(
     loss_sum = 0.0
     all_probs, all_targets = [], []
 
+
     criterion = nn.BCEWithLogitsLoss(reduction='mean')
 
     with torch.no_grad():
@@ -177,17 +178,13 @@ def evaluate(
             imgs = imgs.to(device)
             labels = labels.to(device).float().view(-1, 1)
 
-            # ===== UNIFIED METADATA HANDLING =====
-            if isinstance(meta, tuple) and len(meta) == 2:
-                m_num, m_cat = meta
-                logits = model(
-                    imgs,
-                    m_num.to(device).float(),
-                    m_cat.to(device).long()
-                )
-            else:
-                # fallback nếu không có metadata
-                logits = model(imgs)
+            m_num, m_cat = meta
+
+            logits = model(
+                imgs,
+                m_num.to(device).float(),
+                m_cat.to(device).long()
+            )
 
             loss = criterion(logits, labels)
             loss_sum += loss.item() * imgs.size(0)
@@ -351,108 +348,4 @@ def train_loop(model, train_loader, val_loader, test_loader,
     )
 
     return model.state_dict(), history_data, test_metrics
-    scaler = torch.amp.GradScaler('cuda', enabled=(device.type == 'cuda'))
-    is_late_fusion = (config["METADATA_MODE"] == "late_fusion")
     
-    best_val_auc = 0.0
-    history_data = []
-    
-    # --- Cấu hình Early Stopping ---
-    patience = config.get('PATIENCE', 5)
-    counter = 0
-    
-    history_csv = os.path.join(config['MODEL_OUT'], f"metrics_history_{config['METADATA_MODE']}_{log_suffix}.csv")
-
-    for epoch in range(1, config['EPOCHS'] + 1):
-        model.train()
-        train_loss_sum = 0.0
-        
-        for imgs, meta, labels in tqdm(train_loader, desc=f"Epoch {epoch}"):
-            imgs, labels = imgs.to(device), labels.to(device).float().view(-1, 1)
-            optimizer.zero_grad(set_to_none=True)
-            
-            with torch.amp.autocast('cuda', enabled=(device.type == 'cuda')):
-                if is_late_fusion:
-                    meta_vec, _ = meta
-                    logits = model(imgs, meta_vec.to(device).float())
-                else:
-                    m_num, m_cat = meta
-                    logits = model(imgs, m_num.to(device).float(), m_cat.to(device).long())
-                
-                # Áp dụng Label Smoothing nếu cấu hình
-                smooth = config.get('LABEL_SMOOTHING', 0.0)
-                labels_smooth = labels * (1 - smooth) + 0.5 * smooth
-                loss = criterion(logits, labels_smooth)
-
-            scaler.scale(loss).backward()
-            
-            # Unscale để thực hiện Gradient Clipping
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) 
-            
-            scaler.step(optimizer)
-            scaler.update()
-            train_loss_sum += loss.item() * imgs.size(0)
-
-        # Đánh giá Metrics
-        train_res = evaluate(model, train_loader, device, is_late_fusion)
-        val_res = evaluate(model, val_loader, device, is_late_fusion, find_best_threshold=True)
-        best_threshold = val_res['threshold']
-
-        # Log kết quả
-        epoch_row = {'epoch': epoch}
-        epoch_row.update({f'train_{k}': v for k, v in train_res.items()})
-        epoch_row.update({f'val_{k}': v for k, v in val_res.items()})
-        history_data.append(epoch_row)
-        pd.DataFrame(history_data).to_csv(history_csv, index=False)
-
-        print(f"Epoch {epoch} | Val AUC: {val_res['auc']:.4f} | Val Loss: {val_res['loss']:.4f}")
-
-        if scheduler:
-            # Nếu dùng ReduceLROnPlateau thì cần truyền val_loss
-            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                scheduler.step(val_res['auc'])
-            else:
-                scheduler.step()
-        
-        # --- Logic Early Stopping & Lưu Model ---
-        if val_res['auc'] > best_val_auc:
-            best_val_auc = val_res['auc']
-            counter = 0
-            torch.save({'state_dict': model.state_dict()}, 
-                       os.path.join(config['MODEL_OUT'], f"best_{config['METADATA_MODE']}.pt"))
-        else:
-            counter += 1
-            if counter >= patience:
-                print(f"🛑 Early stopping triggered after {patience} epochs without improvement.")
-                break
-
-        # Grad-CAM visualization
-        if HAS_GRADCAM and epoch % config.get('GRADCAM_SAVE_EVERY', 5) == 0:
-            save_dir = os.path.join(config['MODEL_OUT'], f"gradcam_ep{epoch}")
-            val_batch = next(iter(val_loader))
-            val_imgs = val_batch[0]
-            model.eval()
-            for idx in range(min(4, len(val_imgs))):
-                generate_gradcam(model, val_imgs[idx:idx+1], save_dir, idx)
-            model.train()
-
-    # Tải lại trọng số tốt nhất trước khi test
-    best_ckpt_path = os.path.join(config['MODEL_OUT'], f"best_{config['METADATA_MODE']}.pt")
-    if os.path.exists(best_ckpt_path):
-        model.load_state_dict(torch.load(best_ckpt_path, map_location=device)['state_dict'])
-
-    print("\n🚀 Huấn luyện hoàn tất. Đánh giá trên tập Test...")
-    test_metrics = evaluate(
-    model,
-    test_loader,
-    device,
-    is_late_fusion,
-    threshold=best_threshold,
-    find_best_threshold=False
-)
-
-    pd.DataFrame([test_metrics]).to_csv(os.path.join(config['MODEL_OUT'], f"test_metrics_{log_suffix}.csv"), index=False)
-    
-    plot_metrics_combined(history_data, test_metrics, config['MODEL_OUT'], config['METADATA_MODE'])
-    return model.state_dict(), history_data, test_metrics
