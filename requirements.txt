@@ -1,15 +1,26 @@
-torch
-torchvision
-timm
-pandas
+# --- Core Deep Learning (PyTorch & Models) ---
+torch>=2.0.0
+torchvision>=0.15.0
+timm>=0.9.0
+
+# --- Data Processing & Analysis ---
 numpy
+pandas
 scikit-learn
-matplotlib
-seaborn
+openpyxl
+
+# --- Image Processing & Augmentation ---
 opencv-python
-tqdm
-wandb
+pillow
+scikit-image
+albumentations>=1.3.0
+
+# --- Explainable AI (XAI) ---
 shap
 grad-cam
-scikit-image
-pillow
+
+# --- Visualization, Logging & Utils ---
+matplotlib
+seaborn
+tqdm
+wandb
