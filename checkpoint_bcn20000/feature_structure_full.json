@@ -1,0 +1,26 @@
+{
+    "anatom_site_general": [
+        "anterior torso",
+        "head/neck",
+        "unknown",
+        "upper extremity",
+        "lower extremity",
+        "palms/soles",
+        "oral/genital"
+    ],
+    "anatom_site_special": [
+        "unknown",
+        "acral palms or soles",
+        "oral or genital"
+    ],
+    "diagnosis_confirm_type": [
+        "histopathology",
+        "confocal microscopy with consensus dermoscopy",
+        "unknown"
+    ],
+    "sex": [
+        "male",
+        "female",
+        "unknown"
+    ]
+}

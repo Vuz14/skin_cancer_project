@@ -6,12 +6,36 @@ from .backbone.convnextLarge import ConvNeXtBackbone # Đảm bảo file này t�
 from .backbone.resnet50 import ResNet50Backbone
 
 class MultimodalClassifier(nn.Module):
-    def __init__(self, model_name='resnet50', pretrained=True, cat_cardinalities: Optional[Dict[str, int]] = None,
+    def __init__(self, backbone_type='convnext', pretrained=True, cat_cardinalities: Optional[Dict[str, int]] = None,
                  num_numeric=0, emb_dim=8, num_classes=1, use_metadata=True, meta_weight=1.0):
         super().__init__()
+        self.backbone_type = backbone_type 
         self.use_metadata = use_metadata
         self.num_numeric = num_numeric
         self.cat_cardinalities = cat_cardinalities or {}
+        # ===== Embedding categorical metadata =====
+        if self.use_metadata and len(self.cat_cardinalities) > 0:
+
+            self.cat_names = list(self.cat_cardinalities.keys())
+
+            self.emb_layers = nn.ModuleDict({
+                col: nn.Embedding(cardinality, emb_dim)
+                for col, cardinality in self.cat_cardinalities.items()
+            })
+
+            meta_input_dim = num_numeric + len(self.cat_cardinalities) * emb_dim
+
+            self.metadata_mlp = nn.Sequential(
+                nn.Linear(meta_input_dim, 128),
+                nn.ReLU(),
+                nn.BatchNorm1d(128),
+                nn.Linear(128, 64),
+                nn.ReLU()
+            )
+
+        else:
+            self.cat_names = []
+
         self.emb_dim = emb_dim
         self.meta_weight = meta_weight
 
@@ -39,6 +63,20 @@ class MultimodalClassifier(nn.Module):
 
         # Lấy số chiều feature
         self.img_features_dim = self.backbone.num_features
+        # ===== Fusion dimension =====
+        if self.use_metadata and len(self.cat_cardinalities) > 0:
+            fusion_dim = self.img_features_dim + 64  # 64 là output của metadata_mlp
+        else:
+            fusion_dim = self.img_features_dim
+
+        # ===== Final classifier =====
+        self.classifier = nn.Sequential(
+            nn.Linear(fusion_dim, 256),
+            nn.ReLU(),
+            nn.Dropout(0.4),
+            nn.Linear(256, num_classes)
+        )
+
 
     def forward(self, x_img, meta_num=None, meta_cat=None):
         if x_img.dtype == torch.float16: x_img = x_img.float()
