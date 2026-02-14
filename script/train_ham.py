@@ -79,7 +79,7 @@ def preprocess_ham(df):
         df['label'] = df['dx'].apply(lambda x: 1 if x in ['mel', 'bcc', 'akiec'] else 0)
     return df
 
-# --- PHÂN TÍCH QUAN TRỌNG (Random Forest) - Đồng bộ với BCN ---
+# --- PHÂN TÍCH QUAN TRỌNG (Random Forest) ---
 def analyze_feature_importance_only(train_df, categorical_cols, numeric_cols, config):
     print(f"\n🤖 [Analysis] Đang chạy Random Forest để đánh giá Metadata HAM10000...")
     valid_cat = [c for c in categorical_cols if c in train_df.columns]
@@ -109,18 +109,32 @@ def analyze_feature_importance_only(train_df, categorical_cols, numeric_cols, co
         status = "✅ MẠNH" if score > anchor_score else "⚠️ YẾU"
         print(f"   {i+1}. {name}: {score:.5f} [{status}]")
 
-    # Lưu CSV ngắn gọn
+    # Lưu CSV vào thư mục con (RUN_DIR) - SỬA Ở ĐÂY
+    run_dir = config.get('RUN_DIR', config['MODEL_OUT'])
     csv_name = f"ham10k_{config['SHORT_NAME']}_meta_imp.csv"
-    pd.DataFrame(imps, columns=['Feature', 'Importance']).to_csv(
-        os.path.join(config['MODEL_OUT'], csv_name), index=False
-    )
-    print(f"💾 Đã lưu bảng xếp hạng Metadata vào: {csv_name}")
+    out_path = os.path.join(run_dir, csv_name)
+    
+    pd.DataFrame(imps, columns=['Feature', 'Importance']).to_csv(out_path, index=False)
+    print(f"💾 Đã lưu bảng xếp hạng Metadata vào: {out_path}")
 
 def main(config):
     seed_everything(config['SEED'])
     config['DEVICE'] = check_gpu_status()
     device = torch.device(config['DEVICE'])
+    
+    # --- TẠO THƯ MỤC CON (RUN_DIR) - SỬA Ở ĐÂY ---
+    # Tên thư mục: {METADATA_MODE}_{SHORT_NAME} (vd: full_weighted_effb4)
+    run_name = f"{config['METADATA_MODE']}_{config['SHORT_NAME']}"
+    run_dir = os.path.join(config['MODEL_OUT'], run_name)
+    os.makedirs(run_dir, exist_ok=True)
+    
+    # Cập nhật Config:
+    # RUN_DIR dùng để lưu file chi tiết, MODEL_OUT giữ nguyên để lưu file tổng
+    config['RUN_DIR'] = run_dir 
     os.makedirs(config['MODEL_OUT'], exist_ok=True)
+
+    print(f"📂 Thư mục gốc (Summary): {config['MODEL_OUT']}")
+    print(f"📂 Thư mục chạy (Run Dir): {config['RUN_DIR']}")
 
     print("📂 Loading Data HAM10000...")
     raw_train = preprocess_ham(pd.read_csv(config['TRAIN_CSV']))

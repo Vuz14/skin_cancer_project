@@ -53,7 +53,7 @@ CONFIG = {
     'WARMUP_EPOCHS': 3,
     'WEIGHT_DECAY': 1e-3,
 
-    'METADATA_MODE': 'full', 
+    'METADATA_MODE': 'diag1', 
     'METADATA_FEATURE_BOOST': 2.0,
     'META_CLASS_WEIGHT_BOOST': 1.0,
     'PRETRAINED': True,
@@ -132,11 +132,13 @@ def analyze_feature_importance_only(train_df, categorical_cols, numeric_cols, co
         status = "✅ MẠNH" if score > anchor_score else "⚠️ YẾU"
         print(f"   {i + 1}. {name}: {score:.5f} [{status}]")
 
-    # Lưu kết quả vào CSV chuẩn tên
+    # Lưu kết quả vào thư mục con (RUN_DIR) - SỬA Ở ĐÂY
+    run_dir = config.get('RUN_DIR', config['MODEL_OUT'])
     csv_name = f"bcn20k_{config['SHORT_NAME']}_meta_imp.csv"
-    out_path = os.path.join(config['MODEL_OUT'], csv_name)
+    out_path = os.path.join(run_dir, csv_name)
+    
     pd.DataFrame(feature_imp_list, columns=['Feature', 'Importance']).to_csv(out_path, index=False)
-    print(f"💾 Đã lưu bảng phân tích Metadata vào: {csv_name}")
+    print(f"💾 Đã lưu bảng phân tích Metadata vào: {out_path}")
 
 
 # ==============================================================================
@@ -146,7 +148,20 @@ def main(config):
     seed_everything(config['SEED'])
     config['DEVICE'] = check_gpu_status()
     device = torch.device(config['DEVICE'])
-    os.makedirs(config['MODEL_OUT'], exist_ok=True)
+    
+    # --- TẠO THƯ MỤC CON (RUN_DIR) - SỬA Ở ĐÂY ---
+    # Tên thư mục: {METADATA_MODE}_{SHORT_NAME} (vd: diag1_effb4)
+    run_name = f"{config['METADATA_MODE']}_{config['SHORT_NAME']}"
+    run_dir = os.path.join(config['MODEL_OUT'], run_name)
+    os.makedirs(run_dir, exist_ok=True)
+    
+    # Cập nhật Config: 
+    # RUN_DIR dùng để lưu file chi tiết, MODEL_OUT giữ nguyên để lưu file tổng
+    config['RUN_DIR'] = run_dir 
+    os.makedirs(config['MODEL_OUT'], exist_ok=True) 
+
+    print(f"📂 Thư mục gốc (Summary): {config['MODEL_OUT']}")
+    print(f"📂 Thư mục chạy (Run Dir): {config['RUN_DIR']}")
 
     print("📂 Loading Data BCN20000...")
     raw_train = preprocess_bcn(pd.read_csv(config['TRAIN_CSV']))
@@ -174,16 +189,17 @@ def main(config):
     model = get_model(config, train_ds.cat_cardinalities, len(train_ds.numeric_cols)).to(device)
     set_finetune_mode(model, config['FINE_TUNE_MODE'], config.get('UNFREEZE_KEYWORDS'))
 
-    # Loss Function (Weighted BCE)
+    # Loss Function (Weighted BCE hoặc Focal Loss)
     y_train = raw_train['label'].values
     weights = compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
     pos_weight_val = weights[1] * config['META_CLASS_WEIGHT_BOOST']
+    
     if config['LOSS_TYPE'] == 'focal':
         criterion = FocalLossBCE(alpha=0.75, gamma=2.0)
     else:
         criterion = nn.BCEWithLogitsLoss(
-        pos_weight=torch.tensor(pos_weight_val, device=device)
-    )
+            pos_weight=torch.tensor(pos_weight_val, device=device)
+        )
 
     # Optimizer & Scheduler
     optimizer = torch.optim.AdamW(model.parameters(), lr=config['BASE_LR'], weight_decay=config['WEIGHT_DECAY'])
