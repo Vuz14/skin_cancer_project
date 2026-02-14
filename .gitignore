@@ -26,7 +26,7 @@ D:/NCKH_Checkpoints_*/
 # Loại bỏ hai thư mục checkpoint cụ thể
 D:/skin_cancer_project/checkpoint_bcn20000/
 D:/skin_cancer_project/checkpoint_ham10000/
-
+*.json
 # --- LOG & IDE CONFIG ---
 wandb/
 .idea/

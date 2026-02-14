@@ -6,8 +6,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import cv2
 from tqdm import tqdm
-from sklearn.metrics import accuracy_score, f1_score, recall_score, precision_score, roc_auc_score, confusion_matrix
-
+from sklearn.metrics import accuracy_score, f1_score, recall_score, precision_score, roc_auc_score, confusion_matrix,roc_curve
 # Kiểm tra thư viện Grad-CAM
 try:
     from pytorch_grad_cam import GradCAM
@@ -39,15 +38,21 @@ def generate_gradcam(model, img_tensor, save_dir, idx):
             bs = x.size(0)
             dev = x.device
 
+            # Lấy số metadata từ model
             num_numeric = getattr(self.base_model, 'num_numeric', 0)
-            cat_dim = len(getattr(self.base_model, 'cat_names', []))
-            if cat_dim == 0 and hasattr(self.base_model, 'cat_cardinalities'):
+
+            if hasattr(self.base_model, 'cat_names'):
+                cat_dim = len(self.base_model.cat_names)
+            elif hasattr(self.base_model, 'cat_cardinalities'):
                 cat_dim = len(self.base_model.cat_cardinalities)
+            else:
+                cat_dim = 0
 
             meta_num = torch.zeros((bs, num_numeric), device=dev)
             meta_cat = torch.zeros((bs, cat_dim), dtype=torch.long, device=dev)
 
             return self.base_model(x, meta_num, meta_cat)
+
 
     # -------- CHỌN LAYER CHUẨN --------
     target_layer = None
@@ -55,9 +60,17 @@ def generate_gradcam(model, img_tensor, save_dir, idx):
 
     try:
         # Trường hợp 1: EfficientNet (blocks)
-        if hasattr(model.backbone, 'model') and hasattr(model.backbone.model, 'blocks'):
-            target_layer = model.backbone.model.blocks[-2][-1]
-            layer_name = "efficientnet_blocks[-2]"
+        if hasattr(model.backbone, 'model'):
+            eff = model.backbone.model
+
+        if hasattr(eff, 'conv_head'):
+            target_layer = eff.conv_head
+            layer_name = "efficientnet_conv_head"
+
+        elif hasattr(eff, 'blocks'):
+            target_layer = eff.blocks[-1]
+            layer_name = "efficientnet_blocks[-1]"
+
 
         # Trường hợp 2: ResNet (layer4)
         elif hasattr(model.backbone, 'backbone') and hasattr(model.backbone.backbone, 'layer4'):
@@ -87,7 +100,9 @@ def generate_gradcam(model, img_tensor, save_dir, idx):
     img_input.requires_grad_(True)
 
     try:
-        grayscale_cam = cam(input_tensor=img_input)[0]
+        targets = [ClassifierOutputTarget(0)]  
+        grayscale_cam = cam(input_tensor=img_input, targets=targets)[0]
+
     except Exception as e:
         print(f"⚠️ Grad-CAM failed: {e}")
         return
@@ -143,10 +158,10 @@ def plot_metrics_combined(history_data, test_metrics, out_dir, mode_name):
         plt.savefig(os.path.join(out_dir, f"combined_{metric}_{mode_name}.png"), dpi=300, bbox_inches='tight')
         plt.close()
 
-def evaluate(model: nn.Module, loader, device='cpu', is_late_fusion=None):
+def evaluate(model: nn.Module, loader, device='cpu', is_late_fusion=None, threshold=0.5, find_best_threshold=False):
     model.eval()
     loss_sum = 0.0
-    all_probs, all_preds, all_targets = [], [], []
+    all_probs, all_targets = [], []
     bce = nn.BCEWithLogitsLoss(reduction='mean')
     
     if is_late_fusion is None:
@@ -167,20 +182,34 @@ def evaluate(model: nn.Module, loader, device='cpu', is_late_fusion=None):
 
             loss = bce(logits, labels)
             loss_sum += loss.item() * imgs.size(0)
+
             probs = torch.sigmoid(logits).cpu().numpy().reshape(-1)
             all_probs.extend(probs.tolist())
-            all_preds.extend((probs >= 0.5).astype(int).tolist())
             all_targets.extend(labels.cpu().numpy().reshape(-1).tolist())
 
     y_true = np.array(all_targets)
+    y_probs = np.array(all_probs)
+
+    auc = roc_auc_score(y_true, y_probs) if len(set(y_true)) > 1 else 0.0
+
+    # 🔥 TÌM BEST THRESHOLD TRÊN VAL
+    if find_best_threshold and len(set(y_true)) > 1:
+        fpr, tpr, thresholds = roc_curve(y_true, y_probs)
+        youden_index = tpr - fpr
+        threshold = thresholds[np.argmax(youden_index)]
+        print(f"🔥 Best threshold found: {threshold:.4f}")
+
+    y_pred = (y_probs >= threshold).astype(int)
+
     return {
         'loss': loss_sum / len(loader.dataset),
-        'auc': roc_auc_score(y_true, all_probs) if len(set(y_true)) > 1 else 0.0,
-        'acc': accuracy_score(y_true, all_preds),
-        'f1': f1_score(y_true, all_preds, zero_division=0),
-        'precision': precision_score(y_true, all_preds, zero_division=0),
-        'recall': recall_score(y_true, all_preds, zero_division=0),
-        'spec': calculate_specificity(y_true, all_preds)
+        'auc': auc,
+        'acc': accuracy_score(y_true, y_pred),
+        'f1': f1_score(y_true, y_pred, zero_division=0),
+        'precision': precision_score(y_true, y_pred, zero_division=0),
+        'recall': recall_score(y_true, y_pred, zero_division=0),
+        'spec': calculate_specificity(y_true, y_pred),
+        'threshold': threshold
     }
 
 def train_loop(model, train_loader, val_loader, test_loader, config, criterion, optimizer, scheduler, device, log_suffix=""):
@@ -229,8 +258,9 @@ def train_loop(model, train_loader, val_loader, test_loader, config, criterion, 
 
         # Đánh giá Metrics
         train_res = evaluate(model, train_loader, device, is_late_fusion)
-        val_res = evaluate(model, val_loader, device, is_late_fusion)
-        
+        val_res = evaluate(model, val_loader, device, is_late_fusion, find_best_threshold=True)
+        best_threshold = val_res['threshold']
+
         # Log kết quả
         epoch_row = {'epoch': epoch}
         epoch_row.update({f'train_{k}': v for k, v in train_res.items()})
@@ -275,7 +305,15 @@ def train_loop(model, train_loader, val_loader, test_loader, config, criterion, 
         model.load_state_dict(torch.load(best_ckpt_path, map_location=device)['state_dict'])
 
     print("\n🚀 Huấn luyện hoàn tất. Đánh giá trên tập Test...")
-    test_metrics = evaluate(model, test_loader, device, is_late_fusion)
+    test_metrics = evaluate(
+    model,
+    test_loader,
+    device,
+    is_late_fusion,
+    threshold=best_threshold,
+    find_best_threshold=False
+)
+
     pd.DataFrame([test_metrics]).to_csv(os.path.join(config['MODEL_OUT'], f"test_metrics_{log_suffix}.csv"), index=False)
     
     plot_metrics_combined(history_data, test_metrics, config['MODEL_OUT'], config['METADATA_MODE'])

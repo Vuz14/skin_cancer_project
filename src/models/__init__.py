@@ -7,9 +7,14 @@ def get_model(config, cat_cardinalities, num_numeric):
 
     if mode == 'late_fusion':
         return DualEmbeddingFusion(
-            pretrained=config['PRETRAINED'], cat_cardinalities=cat_cardinalities,
-            num_numeric=num_numeric, num_classes=1, embed_dim=256
-        )
+        pretrained=config['PRETRAINED'],
+        cat_cardinalities=cat_cardinalities,
+        num_numeric=num_numeric,
+        num_classes=1,
+        embed_dim=256,
+        meta_weight=config.get('METADATA_FEATURE_BOOST', 1.0)
+    )
+
     else:
         meta_weight = config.get('METADATA_FEATURE_BOOST', 1.0) if mode == 'full_weighted' else 1.0
         # Gọi class mới MultimodalClassifier

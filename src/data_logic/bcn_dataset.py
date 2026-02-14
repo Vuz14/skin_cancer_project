@@ -120,7 +120,6 @@ class DermoscopyDataset(Dataset):
         meta_num, meta_cat = self._encode_metadata(row)
 
         if self.metadata_mode == 'late_fusion':
-            meta_vec = torch.cat([meta_num, meta_cat.float()], dim=0)
-            return img, (meta_vec, torch.zeros(0)), label
+             return img, (meta_num, meta_cat), label
 
         return img, (meta_num, meta_cat), label

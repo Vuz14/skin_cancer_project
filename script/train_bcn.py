@@ -41,25 +41,26 @@ CONFIG = {
 
     'DEVICE': 'cuda' if torch.cuda.is_available() else 'cpu',
     'SEED': 42,
+ 
+    # --- MODEL---
+    'MODEL_NAME': 'tf_efficientnet_b4_ns',
+    'IMG_SIZE':300,
+    'BATCH_SIZE': 16,
 
-    # --- MODEL: RESNET50 ---
-    'MODEL_NAME': 'resnet50',
-    'IMG_SIZE': 224,
-    'BATCH_SIZE': 32,
-
-    'EPOCHS': 20,
+    'EPOCHS': 15,
     'BASE_LR': 1e-4,
     'WARMUP_EPOCHS': 3,
     'WEIGHT_DECAY': 1e-3,
 
     # --- METADATA ---
     'METADATA_MODE': 'full_weighted',
-    'METADATA_FEATURE_BOOST': 5.0,
+    'METADATA_FEATURE_BOOST': 2.0,
     'META_CLASS_WEIGHT_BOOST': 1.0,
     'PRETRAINED': True,
     'FINE_TUNE_MODE': 'partial_unfreeze',
 
-    'UNFREEZE_KEYWORDS': ['conv_head', 'bn2', 'blocks.6', 'blocks.5'],
+    'UNFREEZE_KEYWORDS': ['conv_head', 'blocks.6', 'blocks.7'],
+
 
     'ACCUM_STEPS': 1,
 
@@ -69,8 +70,8 @@ CONFIG = {
 
     # --- CẤU HÌNH GRAD-CAM (MỚI) ---
     'ENABLE_GRAD_CAM': True,
-    'GRAD_CAM_FREQ': 5,  # Chạy visualization mỗi 5 epoch
-    'GRAD_CAM_TARGET_LAYER': 'layer4',  # Lớp Conv cuối của ResNet50
+    'GRAD_CAM_FREQ': 5,  
+    'GRAD_CAM_TARGET_LAYER': 'blocks.6',  
 }
 
 
@@ -177,7 +178,7 @@ def main(config):
     train_loop(
         model, train_loader, val_loader, test_loader,
         config, criterion, optimizer, scheduler, device,
-        log_suffix="resnet_full_gradcam"
+        log_suffix="tf_efficientnet_b4_ns_full_gradcam"
     )
 
 
