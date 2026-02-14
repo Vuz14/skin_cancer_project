@@ -50,17 +50,27 @@ def generate_gradcam(model, img_tensor, save_dir, idx):
             return self.base_model(x, meta_num, meta_cat)
 
     # -------- CHỌN LAYER CHUẨN --------
-    layer_name = ""
+    target_layer = None
+    layer_name = "unknown"
+
     try:
-        target_layer = model.backbone.model.blocks[-2][-1].conv_dw
-        layer_name = "blocks[-2][-1].conv_dw"
-    except Exception:
-        try:
-            target_layer = model.backbone.model.blocks[-2]
-            layer_name = "blocks[-2]"
-        except Exception:
-            print("⚠️ Không tìm thấy layer phù hợp cho Grad-CAM")
-            return
+        # Trường hợp 1: EfficientNet (blocks)
+        if hasattr(model.backbone, 'model') and hasattr(model.backbone.model, 'blocks'):
+            target_layer = model.backbone.model.blocks[-2][-1]
+            layer_name = "efficientnet_blocks[-2]"
+
+        # Trường hợp 2: ResNet (layer4)
+        elif hasattr(model.backbone, 'backbone') and hasattr(model.backbone.backbone, 'layer4'):
+            target_layer = model.backbone.backbone.layer4[-1]
+            layer_name = "resnet_layer4"
+
+    except Exception as e:
+        print(f"⚠️ Lỗi chọn layer GradCAM: {e}")
+        return
+
+    if target_layer is None:
+        print("⚠️ Không tìm thấy layer phù hợp cho Grad-CAM (Check ResNet/EffNet structure)")
+        return
 
     cam = GradCAM(
         model=_ImageOnlyWrapper(model),
