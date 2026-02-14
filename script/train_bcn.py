@@ -38,7 +38,7 @@ CONFIG = {
     'META_CLASS_WEIGHT_BOOST': 1.0, 
     'PRETRAINED': True, 
     'FINE_TUNE_MODE': 'partial_unfreeze',
-    'UNFREEZE_KEYWORDS': ['conv_head', 'bn2', 'blocks.6', 'blocks.5', 'blocks.4'],
+    'UNFREEZE_KEYWORDS': ['conv_head', 'bn2', 'blocks.6', 'blocks.5'],
     'ACCUM_STEPS': 1,
     'SHAP_THRESHOLD': 0.005, 
     'NSAMPLES_SHAP': 50,
