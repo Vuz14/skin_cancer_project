@@ -12,6 +12,7 @@ from sklearn.impute import SimpleImputer
 
 # Thêm đường dẫn gốc của dự án
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+from src.utils.losses import FocalLossBCE
 
 from src.data_logic.bcn_dataset import DermoscopyDataset
 from src.models import get_model
@@ -52,9 +53,7 @@ CONFIG = {
     'WARMUP_EPOCHS': 3,
     'WEIGHT_DECAY': 1e-3,
 
-    # --- METADATA STRATEGY ---
-    # Chọn 'full_weighted' (ghép sớm) hoặc 'late_fusion' (ghép muộn)
-    'METADATA_MODE': 'full_weighted', 
+    'METADATA_MODE': 'full', 
     'METADATA_FEATURE_BOOST': 2.0,
     'META_CLASS_WEIGHT_BOOST': 1.0,
     'PRETRAINED': True,
@@ -71,6 +70,7 @@ CONFIG = {
     # --- CẤU HÌNH GRAD-CAM ---
     'ENABLE_GRAD_CAM': True,
     'GRAD_CAM_FREQ': 5,  
+    'LOSS_TYPE': 'focal'
 }
 
 def preprocess_bcn(df):
@@ -178,7 +178,12 @@ def main(config):
     y_train = raw_train['label'].values
     weights = compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
     pos_weight_val = weights[1] * config['META_CLASS_WEIGHT_BOOST']
-    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weight_val, device=device))
+    if config['LOSS_TYPE'] == 'focal':
+        criterion = FocalLossBCE(alpha=0.75, gamma=2.0)
+    else:
+        criterion = nn.BCEWithLogitsLoss(
+        pos_weight=torch.tensor(pos_weight_val, device=device)
+    )
 
     # Optimizer & Scheduler
     optimizer = torch.optim.AdamW(model.parameters(), lr=config['BASE_LR'], weight_decay=config['WEIGHT_DECAY'])

@@ -5,15 +5,17 @@ import torch.nn as nn
 import pandas as pd
 import numpy as np
 import json
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from sklearn.utils.class_weight import compute_class_weight
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 
+# Thêm đường dẫn gốc
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from src.data_logic.ham_dataset import HAM10000Dataset
 from src.models import get_model
+from src.utils.losses import FocalLoss
 from src.utils.common import seed_everything, get_warmup_cosine_scheduler, set_finetune_mode
 from src.utils.trainer import train_loop
 
@@ -36,26 +38,31 @@ CONFIG = {
     'SEED': 42,
     
     # --- MODEL & NAMING ---
-    'MODEL_NAME': 'tf_efficientnet_b4_ns', # Hoặc 'resnet50'
-    'SHORT_NAME': 'effb4',                 # Tên ngắn để lưu file csv (effb4, res50)
+    'MODEL_NAME': 'tf_efficientnet_b4_ns',
+    'SHORT_NAME': 'effb4',                 # Tên ngắn để lưu file
     
-    'IMG_SIZE': 224, # HAM10000 thường nhỏ hơn, 224 là chuẩn
+    'IMG_SIZE': 224, 
     'BATCH_SIZE': 16,
     'EPOCHS': 20,
-    'BASE_LR': 1e-4,
+    'BASE_LR': 8e-5,        # Learning rate thấp hơn cho HAM
     'WARMUP_EPOCHS': 3,
     'WEIGHT_DECAY': 1e-3,
 
     # --- METADATA ---
-    'METADATA_MODE': 'full_weighted',
+    # Chọn 'full_weighted' hoặc 'late_fusion'
+    'METADATA_MODE': 'full_weighted', 
     'METADATA_FEATURE_BOOST': 2.0,
+    
     'PRETRAINED': True,
     'FINE_TUNE_MODE': 'partial_unfreeze',
-    'UNFREEZE_KEYWORDS': ['conv_head', 'blocks.6', 'blocks.5'], # Tinh chỉnh cho EffNet
+    'UNFREEZE_SUBSTRINGS': ['layers', 'blocks', 'norm', 'conv_head', 'features', 'stem'],
+    
+    'USE_SAMPLER': True,   # HAM10000 rất mất cân bằng, nên dùng Sampler
+    'ACCUM_STEPS': 1,
 
     # --- ANALYSIS ---
     'ANALYZE_METADATA': True,
-    'ANCHOR_VALUE_NAME': 'lower extremity', # Một giá trị mẫu trong localization để so sánh
+    'ANCHOR_VALUE_NAME': 'lower extremity', # Giá trị mẫu để so sánh độ quan trọng
 
     # --- GRAD-CAM ---
     'ENABLE_GRAD_CAM': True,
@@ -72,9 +79,9 @@ def preprocess_ham(df):
         df['label'] = df['dx'].apply(lambda x: 1 if x in ['mel', 'bcc', 'akiec'] else 0)
     return df
 
-# --- PHÂN TÍCH QUAN TRỌNG (Random Forest) ---
-def analyze_feature_importance_only(train_df, categorical_cols, numeric_cols, anchor_value):
-    print(f"\n🤖 [Analysis] Đang chạy Random Forest để đánh giá Metadata...")
+# --- PHÂN TÍCH QUAN TRỌNG (Random Forest) - Đồng bộ với BCN ---
+def analyze_feature_importance_only(train_df, categorical_cols, numeric_cols, config):
+    print(f"\n🤖 [Analysis] Đang chạy Random Forest để đánh giá Metadata HAM10000...")
     valid_cat = [c for c in categorical_cols if c in train_df.columns]
     valid_num = [c for c in numeric_cols if c in train_df.columns]
     
@@ -90,17 +97,24 @@ def analyze_feature_importance_only(train_df, categorical_cols, numeric_cols, an
         meta_df = pd.concat([meta_df, temp_num], axis=1)
 
     y = train_df['label'].values
-    rf = RandomForestClassifier(n_estimators=100, max_depth=8, class_weight='balanced', random_state=42)
+    rf = RandomForestClassifier(n_estimators=100, max_depth=8, class_weight='balanced', random_state=42, n_jobs=-1)
     rf.fit(meta_df, y)
     
     imps = sorted(zip(meta_df.columns, rf.feature_importances_), key=lambda x: x[1], reverse=True)
     
+    # In ra màn hình Top 5
+    anchor_score = next((s for n, s in imps if config['ANCHOR_VALUE_NAME'] in n), 0)
+    print("\n📊 TOP METADATA FEATURES:")
+    for i, (name, score) in enumerate(imps[:8]):
+        status = "✅ MẠNH" if score > anchor_score else "⚠️ YẾU"
+        print(f"   {i+1}. {name}: {score:.5f} [{status}]")
+
     # Lưu CSV ngắn gọn
-    csv_name = f"ham10k_{CONFIG['SHORT_NAME']}_meta_imp.csv"
+    csv_name = f"ham10k_{config['SHORT_NAME']}_meta_imp.csv"
     pd.DataFrame(imps, columns=['Feature', 'Importance']).to_csv(
-        os.path.join(CONFIG['MODEL_OUT'], csv_name), index=False
+        os.path.join(config['MODEL_OUT'], csv_name), index=False
     )
-    print(f"📊 Đã lưu bảng xếp hạng Metadata vào: {csv_name}")
+    print(f"💾 Đã lưu bảng xếp hạng Metadata vào: {csv_name}")
 
 def main(config):
     seed_everything(config['SEED'])
@@ -108,7 +122,7 @@ def main(config):
     device = torch.device(config['DEVICE'])
     os.makedirs(config['MODEL_OUT'], exist_ok=True)
 
-    print("📂 Loading Data...")
+    print("📂 Loading Data HAM10000...")
     raw_train = preprocess_ham(pd.read_csv(config['TRAIN_CSV']))
     raw_val = preprocess_ham(pd.read_csv(config['VAL_CSV']))
     raw_test = preprocess_ham(pd.read_csv(config['TEST_CSV']))
@@ -118,29 +132,38 @@ def main(config):
     num_cols = ['age']
 
     if config['ANALYZE_METADATA']:
-        analyze_feature_importance_only(raw_train, cat_cols, num_cols, config['ANCHOR_VALUE_NAME'])
+        analyze_feature_importance_only(raw_train, cat_cols, num_cols, config)
 
     print("🚀 Khởi tạo Dataset & Loader...")
+    # Lưu ý: HAM10000Dataset đã được cập nhật dùng Albumentations ở bước trước
     train_ds = HAM10000Dataset(raw_train, config['IMG_ROOT'], config['IMG_SIZE'], config['METADATA_MODE'], train=True)
     val_ds = HAM10000Dataset(raw_val, config['IMG_ROOT'], config['IMG_SIZE'], config['METADATA_MODE'], train=False)
     test_ds = HAM10000Dataset(raw_test, config['IMG_ROOT'], config['IMG_SIZE'], config['METADATA_MODE'], train=False)
 
-    train_loader = DataLoader(train_ds, batch_size=config['BATCH_SIZE'], shuffle=True, num_workers=4)
+    # Sampler cho tập Train (Do HAM10000 lệch nhãn)
+    train_sampler = None
+    if config['USE_SAMPLER']:
+        targets = raw_train['label'].values
+        class_counts = np.bincount(targets)
+        weights = 1. / class_counts
+        samples_weights = torch.from_numpy(weights[targets]).double()
+        train_sampler = WeightedRandomSampler(samples_weights, len(samples_weights))
+
+    train_loader = DataLoader(train_ds, batch_size=config['BATCH_SIZE'], sampler=train_sampler, num_workers=4)
+    # Val/Test không cần sampler, chỉ cần shuffle=False
     val_loader = DataLoader(val_ds, batch_size=config['BATCH_SIZE'], shuffle=False, num_workers=4)
     test_loader = DataLoader(test_ds, batch_size=config['BATCH_SIZE'], shuffle=False, num_workers=4)
 
     model = get_model(config, train_ds.cat_cardinalities, len(train_ds.numeric_cols)).to(device)
-    set_finetune_mode(model, config['FINE_TUNE_MODE'], config.get('UNFREEZE_KEYWORDS'))
-
-    y_train = raw_train['label'].values
-    weights = compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
-    pos_weight = torch.tensor(weights[1] * 1.2, device=device) # Boost nhẹ cho lớp bệnh
-    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    set_finetune_mode(model, config['FINE_TUNE_MODE'], config['UNFREEZE_SUBSTRINGS'])
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=config['BASE_LR'], weight_decay=config['WEIGHT_DECAY'])
+    
+    # Focal Loss hoạt động tốt với dữ liệu mất cân bằng như HAM
+    criterion = FocalLoss(alpha=0.75, gamma=2.0)
     scheduler = get_warmup_cosine_scheduler(optimizer, config['WARMUP_EPOCHS'], config['EPOCHS'])
 
-    # Tên suffix chuẩn: ham10k_effb4
+    # Suffix chuẩn: ham10k_effb4
     log_suffix = f"ham10k_{config['SHORT_NAME']}"
     
     train_loop(
