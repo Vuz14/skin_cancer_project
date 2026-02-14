@@ -134,7 +134,7 @@ class DualEmbeddingFusion(nn.Module):
             nn.Dropout(0.5),
 
             nn.Linear(128, embed_dim),
-            nn.BatchNorm1d(embed_dim),
+            nn.LayerNorm(embed_dim),
             nn.ReLU(),
             nn.Dropout(0.3),
         )

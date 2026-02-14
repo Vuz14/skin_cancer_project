@@ -158,29 +158,38 @@ def plot_metrics_combined(history_data, test_metrics, out_dir, mode_name):
         plt.savefig(os.path.join(out_dir, f"combined_{metric}_{mode_name}.png"), dpi=300, bbox_inches='tight')
         plt.close()
 
-def evaluate(model: nn.Module, loader, device='cpu', is_late_fusion=None, threshold=0.5, find_best_threshold=False):
+def evaluate(
+    model: nn.Module,
+    loader,
+    device='cpu',
+    threshold=0.5,
+    find_best_threshold=False
+):
     model.eval()
     loss_sum = 0.0
     all_probs, all_targets = [], []
-    bce = nn.BCEWithLogitsLoss(reduction='mean')
-    
-    if is_late_fusion is None:
-        is_late_fusion = hasattr(model, "metadata_mode") and model.metadata_mode == "late_fusion"
+
+    criterion = nn.BCEWithLogitsLoss(reduction='mean')
 
     with torch.no_grad():
-        for batch in loader:
-            imgs, meta, labels = batch
+        for imgs, meta, labels in loader:
+
             imgs = imgs.to(device)
-            labels = labels.to(device, dtype=torch.float32).view(-1, 1)
+            labels = labels.to(device).float().view(-1, 1)
 
-            if is_late_fusion:
-                meta_vec, _ = meta
-                logits = model(imgs, meta_vec.to(device).float())
-            else:
+            # ===== UNIFIED METADATA HANDLING =====
+            if isinstance(meta, tuple) and len(meta) == 2:
                 m_num, m_cat = meta
-                logits = model(imgs, m_num.to(device).float(), m_cat.to(device).long())
+                logits = model(
+                    imgs,
+                    m_num.to(device).float(),
+                    m_cat.to(device).long()
+                )
+            else:
+                # fallback nếu không có metadata
+                logits = model(imgs)
 
-            loss = bce(logits, labels)
+            loss = criterion(logits, labels)
             loss_sum += loss.item() * imgs.size(0)
 
             probs = torch.sigmoid(logits).cpu().numpy().reshape(-1)
@@ -192,7 +201,6 @@ def evaluate(model: nn.Module, loader, device='cpu', is_late_fusion=None, thresh
 
     auc = roc_auc_score(y_true, y_probs) if len(set(y_true)) > 1 else 0.0
 
-    # 🔥 TÌM BEST THRESHOLD TRÊN VAL
     if find_best_threshold and len(set(y_true)) > 1:
         fpr, tpr, thresholds = roc_curve(y_true, y_probs)
         youden_index = tpr - fpr
@@ -212,7 +220,137 @@ def evaluate(model: nn.Module, loader, device='cpu', is_late_fusion=None, thresh
         'threshold': threshold
     }
 
-def train_loop(model, train_loader, val_loader, test_loader, config, criterion, optimizer, scheduler, device, log_suffix=""):
+def train_loop(model, train_loader, val_loader, test_loader,
+               config, criterion, optimizer, scheduler, device, log_suffix=""):
+
+    scaler = torch.amp.GradScaler('cuda', enabled=(device.type == 'cuda'))
+
+    best_val_auc = 0.0
+    history_data = []
+    patience = config.get('PATIENCE', 5)
+    counter = 0
+
+    history_csv = os.path.join(
+        config['MODEL_OUT'],
+        f"metrics_history_{config['METADATA_MODE']}_{log_suffix}.csv"
+    )
+
+    best_threshold = 0.5
+
+    for epoch in range(1, config['EPOCHS'] + 1):
+
+        model.train()
+        train_loss_sum = 0.0
+
+        for imgs, meta, labels in tqdm(train_loader, desc=f"Epoch {epoch}"):
+
+            imgs = imgs.to(device)
+            labels = labels.to(device).float().view(-1, 1)
+
+            m_num, m_cat = meta
+
+            optimizer.zero_grad(set_to_none=True)
+
+            with torch.amp.autocast('cuda', enabled=(device.type == 'cuda')):
+
+                logits = model(
+                    imgs,
+                    m_num.to(device).float(),
+                    m_cat.to(device).long()
+                )
+
+                smooth = config.get('LABEL_SMOOTHING', 0.0)
+                labels_smooth = labels * (1 - smooth) + 0.5 * smooth
+                loss = criterion(logits, labels_smooth)
+
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            scaler.step(optimizer)
+            scaler.update()
+
+            train_loss_sum += loss.item() * imgs.size(0)
+
+        # ===== Evaluation =====
+        train_res = evaluate(model, train_loader, device)
+        val_res = evaluate(model, val_loader, device, find_best_threshold=True)
+
+        best_threshold = val_res['threshold']
+
+        epoch_row = {'epoch': epoch}
+        epoch_row.update({f'train_{k}': v for k, v in train_res.items()})
+        epoch_row.update({f'val_{k}': v for k, v in val_res.items()})
+        history_data.append(epoch_row)
+
+        pd.DataFrame(history_data).to_csv(history_csv, index=False)
+
+        print(f"Epoch {epoch} | Val AUC: {val_res['auc']:.4f} | Val Loss: {val_res['loss']:.4f}")
+
+        if scheduler:
+            if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                scheduler.step(val_res['auc'])
+            else:
+                scheduler.step()
+
+        # ===== Early stopping =====
+        if val_res['auc'] > best_val_auc:
+            best_val_auc = val_res['auc']
+            counter = 0
+            torch.save(
+                {'state_dict': model.state_dict()},
+                os.path.join(config['MODEL_OUT'],
+                             f"best_{config['METADATA_MODE']}.pt")
+            )
+        else:
+            counter += 1
+            if counter >= patience:
+                print(f"🛑 Early stopping triggered.")
+                break
+
+        # ===== GradCAM =====
+        if HAS_GRADCAM and epoch % config.get('GRADCAM_SAVE_EVERY', 5) == 0:
+            save_dir = os.path.join(config['MODEL_OUT'], f"gradcam_ep{epoch}")
+            val_batch = next(iter(val_loader))
+            val_imgs = val_batch[0]
+            model.eval()
+            for idx in range(min(4, len(val_imgs))):
+                generate_gradcam(model, val_imgs[idx:idx+1], save_dir, idx)
+            model.train()
+
+    # ===== Load best model =====
+    best_ckpt_path = os.path.join(
+        config['MODEL_OUT'],
+        f"best_{config['METADATA_MODE']}.pt"
+    )
+
+    if os.path.exists(best_ckpt_path):
+        model.load_state_dict(
+            torch.load(best_ckpt_path, map_location=device)['state_dict']
+        )
+
+    print("\n🚀 Training complete. Evaluating on Test set...")
+
+    test_metrics = evaluate(
+        model,
+        test_loader,
+        device,
+        threshold=best_threshold
+    )
+
+    pd.DataFrame([test_metrics]).to_csv(
+        os.path.join(config['MODEL_OUT'],
+                     f"test_metrics_{log_suffix}.csv"),
+        index=False
+    )
+
+    plot_metrics_combined(
+        history_data,
+        test_metrics,
+        config['MODEL_OUT'],
+        config['METADATA_MODE']
+    )
+
+    return model.state_dict(), history_data, test_metrics
     scaler = torch.amp.GradScaler('cuda', enabled=(device.type == 'cuda'))
     is_late_fusion = (config["METADATA_MODE"] == "late_fusion")
     
