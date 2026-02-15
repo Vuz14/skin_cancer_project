@@ -43,7 +43,6 @@ CONFIG = {
     'SEED': 42, 
     'IMG_SIZE': 224, 
     'BATCH_SIZE': 16, 
-    'BACKBONE': 'convnext',
     
     'EPOCHS': 15,           
     'BASE_LR': 5e-5,        
@@ -51,12 +50,9 @@ CONFIG = {
     'WEIGHT_DECAY': 1e-3,   
     # --------------------------------------------------
     'LABEL_SMOOTHING': 0.1,
-    'METADATA_MODE': 'diag1', 
+    'METADATA_MODE': 'full', 
     'DEVICE': 'cuda' if torch.cuda.is_available() else 'cpu',
     'SEED': 42,
-
-    # --- MODEL: RESNET50 ---
-    'MODEL_NAME': 'resnet50',
     'IMG_SIZE': 224,
     'BATCH_SIZE': 32,
 
@@ -85,10 +81,13 @@ CONFIG = {
     'GRAD_CAM_FREQ': 5,  # Chạy visualization mỗi 5 epoch
     'GRAD_CAM_TARGET_LAYER': 'layer4',  # Lớp Conv cuối của ResNet50
 }
-if CONFIG["BACKBONE"] == "convnext":
+if CONFIG["BACKBONE_TYPE"] == "convnext":
     from src.utils.trainer_convnext import train_loop
+    print("🔥 Trainer selected: trainer_convnext (ConvNeXt)")
 else:
     from src.utils.trainer import train_loop
+    print("🔥 Trainer selected: standard trainer")
+
 def preprocess_bcn(df):
     """Làm sạch dữ liệu cơ bản và tạo nhãn chuẩn"""
     df = df.copy()
