@@ -14,6 +14,7 @@ def get_model(config, cat_cardinalities, num_numeric):
         # Nếu bạn dùng DualEmbeddingFusion, hãy đảm bảo class này trong fusion_head.py 
         # cũng đã được sửa để nhận backbone_type tương tự MultimodalModel
         return DualEmbeddingFusion(
+<<<<<<< HEAD
             backbone_type=config['BACKBONE_TYPE'], 
             pretrained=config.get('PRETRAINED', True), 
             cat_cardinalities=cat_cardinalities,
@@ -21,6 +22,16 @@ def get_model(config, cat_cardinalities, num_numeric):
             num_classes=1, 
             embed_dim=256
         )
+=======
+        pretrained=config['PRETRAINED'],
+        cat_cardinalities=cat_cardinalities,
+        num_numeric=num_numeric,
+        num_classes=1,
+        embed_dim=256,
+        meta_weight=config.get('METADATA_FEATURE_BOOST', 1.0)
+    )
+
+>>>>>>> origin/main
     else:
         meta_weight = config.get('METADATA_FEATURE_BOOST', 1.0) if mode == 'full_weighted' else 1.0
         return MultimodalClassifier(
