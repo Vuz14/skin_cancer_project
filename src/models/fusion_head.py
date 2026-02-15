@@ -41,16 +41,23 @@ class MultimodalClassifier(nn.Module):
 
         if use_metadata:
             input_meta_dim = total_emb_dim + max(0, num_numeric)
-            self.metadata_mlp = nn.Sequential(
+            # FiLM generator: generates gamma and beta for modulation
+            self.film_generator = nn.Sequential(
                 nn.Linear(input_meta_dim, 128),
                 nn.BatchNorm1d(128),
                 nn.ReLU(),
                 nn.Dropout(0.5),
                 nn.Linear(128, 64),
-                nn.ReLU()
+                nn.ReLU(),
+                nn.Dropout(0.3),
+                nn.Linear(64, self.img_features_dim * 2)
             )
+            # Initialize FiLM parameters to zero (identity transformation initially)
+            self.film_generator[-1].weight.data.zero_()
+            self.film_generator[-1].bias.data.zero_()
+            
             self.classifier = nn.Sequential(
-                nn.Linear(self.img_features_dim + 64, 256),
+                nn.Linear(self.img_features_dim, 256),
                 nn.BatchNorm1d(256),
                 nn.ReLU(),
                 nn.Dropout(0.5),
@@ -62,7 +69,9 @@ class MultimodalClassifier(nn.Module):
 
                 nn.Linear(128, num_classes)
             )
+            self.metadata_mlp = None  # Not used with FiLM
         else:
+            self.film_generator = None
             self.metadata_mlp = None
             self.classifier = nn.Sequential(
                 nn.Linear(self.img_features_dim, 256),
@@ -83,10 +92,12 @@ class MultimodalClassifier(nn.Module):
             meta_input = torch.cat([meta_num, emb_concat], dim=1) if self.num_numeric > 0 else emb_concat
             if meta_input.dtype == torch.float16: meta_input = meta_input.float()
 
-            feat_meta = self.metadata_mlp(meta_input)
-            feat_meta = feat_meta * min(self.meta_weight, 2.0)
-
-            feat = torch.cat([feat_img, feat_meta], dim=1)
+            # FiLM: Generate gamma and beta from metadata
+            film_params = self.film_generator(meta_input)
+            gamma, beta = torch.split(film_params, self.img_features_dim, dim=1)
+            
+            # Apply FiLM modulation: (1 + gamma) * feat + beta
+            feat = (1 + gamma) * feat_img + beta
         else:
             feat = feat_img
 
