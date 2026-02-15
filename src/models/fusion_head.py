@@ -38,8 +38,7 @@ class MultimodalClassifier(nn.Module):
 
         self.emb_dim = emb_dim
         self.meta_weight = meta_weight
-
-        # --- LOGIC CHỌN BACKBONE ---
+        
         if self.backbone_type == 'convnext':
             self.backbone = ConvNeXtBackbone(
                 model_name='convnext_large',

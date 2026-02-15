@@ -6,7 +6,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import cv2
 from tqdm import tqdm
-from sklearn.metrics import accuracy_score, f1_score, recall_score, precision_score, roc_auc_score, confusion_matrix
+from sklearn.metrics import (
+    accuracy_score, f1_score, recall_score,
+    precision_score, roc_auc_score, confusion_matrix
+)
 
 # =========================================================
 # GradCAM availability check
@@ -23,39 +26,38 @@ except ImportError:
 # Utility
 # =========================================================
 def calculate_specificity(y_true, y_pred):
-    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel() if len(set(y_true)) > 1 else (0, 0, 0, 0)
+    tn, fp, fn, tp = (
+        confusion_matrix(y_true, y_pred).ravel()
+        if len(set(y_true)) > 1 else (0, 0, 0, 0)
+    )
     return tn / (tn + fp + 1e-12) if (tn + fp) > 0 else 0.0
 
 
 # =========================================================
-# 🔥 GRADCAM (CHỈ CHẠY BACKBONE – KHÔNG ĐỔI WORKFLOW)
+# GradCAM (BACKBONE ONLY)
 # =========================================================
 def generate_gradcam(model, img_tensor, save_dir, idx):
-    """
-    GradCAM chỉ chạy trên image backbone.
-    Không ảnh hưởng metadata branch.
-    """
 
     device = next(model.parameters()).device
     model.eval()
 
     if not hasattr(model, "backbone"):
-        raise ValueError("❌ Model không có thuộc tính 'backbone'.")
+        raise ValueError("Model has no backbone attribute")
 
-    backbone_model = model.backbone
+    backbone = model.backbone
 
-    # Tìm Conv2d cuối cùng trong backbone
+    # find last Conv2d
     target_layer = None
-    for m in reversed(list(backbone_model.modules())):
+    for m in reversed(list(backbone.modules())):
         if isinstance(m, nn.Conv2d):
             target_layer = m
             break
 
     if target_layer is None:
-        raise ValueError("❌ Không tìm thấy Conv layer cho GradCAM.")
+        raise ValueError("No Conv2d layer found for GradCAM")
 
     cam = GradCAM(
-        model=backbone_model,
+        model=backbone,
         target_layers=[target_layer]
     )
 
@@ -69,8 +71,11 @@ def generate_gradcam(model, img_tensor, save_dir, idx):
 
     cam_image = show_cam_on_image(img_np, grayscale_cam, use_rgb=True)
 
-    save_path = os.path.join(save_dir, f"sample_{idx}.png")
-    cv2.imwrite(save_path, cv2.COLOR_RGB2BGR if False else cv2.cvtColor(cam_image, cv2.COLOR_RGB2BGR))
+    os.makedirs(save_dir, exist_ok=True)
+    cv2.imwrite(
+        os.path.join(save_dir, f"sample_{idx}.png"),
+        cv2.cvtColor(cam_image, cv2.COLOR_RGB2BGR)
+    )
 
 
 # =========================================================
@@ -83,22 +88,27 @@ def evaluate(model: nn.Module, loader, device='cpu', is_late_fusion=None):
     bce = nn.BCEWithLogitsLoss(reduction='mean')
 
     if is_late_fusion is None:
-        is_late_fusion = hasattr(model, "metadata_mode") and model.metadata_mode == "late_fusion"
+        is_late_fusion = (
+            hasattr(model, "metadata_mode")
+            and model.metadata_mode == "late_fusion"
+        )
 
     with torch.no_grad():
         for batch in loader:
             imgs, meta, labels = batch
             imgs = imgs.to(device)
-            labels = labels.to(device).float()
-            if labels.ndim == 1:
-                labels = labels.unsqueeze(1)
+            labels = labels.to(device).float().view(-1, 1)
 
             if is_late_fusion:
                 meta_vec, _ = meta
                 logits = model(imgs, meta_vec.to(device).float())
             else:
                 m_num, m_cat = meta
-                logits = model(imgs, m_num.to(device).float(), m_cat.to(device).long())
+                logits = model(
+                    imgs,
+                    m_num.to(device).float(),
+                    m_cat.to(device).long()
+                )
 
             loss = bce(logits, labels)
             loss_sum += loss.item() * imgs.size(0)
@@ -122,19 +132,27 @@ def evaluate(model: nn.Module, loader, device='cpu', is_late_fusion=None):
 
 
 # =========================================================
-# TRAIN LOOP (GIỮ NGUYÊN WORKFLOW)
+# TRAIN LOOP (ORIGINAL WORKFLOW + AMP OFF)
 # =========================================================
-def train_loop(model, train_loader, val_loader, test_loader,
-               config, criterion, optimizer, scheduler,
-               device, log_suffix=""):
+def train_loop(
+    model, train_loader, val_loader, test_loader,
+    config, criterion, optimizer, scheduler,
+    device, log_suffix=""
+):
 
+    # 🔴 AMP OFF for ConvNeXt stability
     scaler = torch.amp.GradScaler('cuda', enabled=False)
+
     is_late_fusion = (config["METADATA_MODE"] == "late_fusion")
 
     best_val_auc = 0.0
     history_data = []
 
+    patience = config.get('PATIENCE', 5)
+    counter = 0
+
     os.makedirs(config['MODEL_OUT'], exist_ok=True)
+
     history_csv = os.path.join(
         config['MODEL_OUT'],
         f"metrics_history_{config['METADATA_MODE']}_{log_suffix}.csv"
@@ -143,14 +161,16 @@ def train_loop(model, train_loader, val_loader, test_loader,
     for epoch in range(1, config['EPOCHS'] + 1):
 
         model.train()
+        train_loss_sum = 0.0
 
         for imgs, meta, labels in tqdm(train_loader, desc=f"Epoch {epoch}"):
 
             imgs = imgs.to(device)
-            labels = labels.to(device).float()
+            labels = labels.to(device).float().view(-1, 1)
 
             optimizer.zero_grad(set_to_none=True)
 
+            # 🔴 AMP OFF
             with torch.amp.autocast('cuda', enabled=False):
 
                 if is_late_fusion:
@@ -158,18 +178,25 @@ def train_loop(model, train_loader, val_loader, test_loader,
                     logits = model(imgs, meta_vec.to(device).float())
                 else:
                     m_num, m_cat = meta
-                    logits = model(imgs,
-                                   m_num.to(device).float(),
-                                   m_cat.to(device).long())
+                    logits = model(
+                        imgs,
+                        m_num.to(device).float(),
+                        m_cat.to(device).long()
+                    )
 
-                loss = criterion(
-                    logits.view(-1, 1),
-                    labels.view(-1, 1) * 0.9 + 0.05
-                )
+                smooth = config.get('LABEL_SMOOTHING', 0.0)
+                labels_smooth = labels * (1 - smooth) + 0.5 * smooth
+                loss = criterion(logits, labels_smooth)
 
             scaler.scale(loss).backward()
+
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
             scaler.step(optimizer)
             scaler.update()
+
+            train_loss_sum += loss.item() * imgs.size(0)
 
         # ===== Evaluate =====
         train_res = evaluate(model, train_loader, device, is_late_fusion)
@@ -182,35 +209,54 @@ def train_loop(model, train_loader, val_loader, test_loader,
 
         pd.DataFrame(history_data).to_csv(history_csv, index=False)
 
-        tqdm.write(
-            f"Epoch {epoch} | Train AUC: {train_res['auc']:.4f} | "
-            f"Val AUC: {val_res['auc']:.4f}"
+        print(
+            f"Epoch {epoch} | Val AUC: {val_res['auc']:.4f} | "
+            f"Val Loss: {val_res['loss']:.4f}"
         )
 
+        # ===== Scheduler (original logic) =====
         if scheduler:
-            scheduler.step()
+            if isinstance(
+                scheduler,
+                torch.optim.lr_scheduler.ReduceLROnPlateau
+            ):
+                scheduler.step(val_res['auc'])
+            else:
+                scheduler.step()
 
+        # ===== Early Stopping + Save =====
         if val_res['auc'] > best_val_auc:
             best_val_auc = val_res['auc']
+            counter = 0
             torch.save(
                 {'state_dict': model.state_dict()},
-                os.path.join(config['MODEL_OUT'],
-                             f"best_{config['METADATA_MODE']}.pt")
+                os.path.join(
+                    config['MODEL_OUT'],
+                    f"best_{config['METADATA_MODE']}.pt"
+                )
             )
+        else:
+            counter += 1
+            if counter >= patience:
+                print(
+                    f"Early stopping triggered "
+                    f"after {patience} epochs"
+                )
+                break
 
         # ===== GradCAM =====
-        if (config.get('LOG_GRADCAM_EVERY_EPOCH', True)
-                and HAS_GRADCAM
-                and epoch % config.get('GRADCAM_SAVE_EVERY', 5) == 0):
-
+        if (
+            HAS_GRADCAM
+            and epoch % config.get('GRADCAM_SAVE_EVERY', 5) == 0
+        ):
             save_dir = os.path.join(
                 config['MODEL_OUT'],
-                f"{config['METADATA_MODE']}_gradcam_{epoch}"
+                f"gradcam_ep{epoch}"
             )
-            os.makedirs(save_dir, exist_ok=True)
 
             try:
-                val_imgs, _, _ = next(iter(val_loader))
+                val_batch = next(iter(val_loader))
+                val_imgs = val_batch[0]
 
                 model.eval()
                 for idx in range(min(4, len(val_imgs))):
@@ -223,19 +269,29 @@ def train_loop(model, train_loader, val_loader, test_loader,
                 model.train()
 
             except Exception as e:
-                print(f"⚠️ Grad-CAM failed: {e}")
+                print(f"GradCAM failed: {e}")
 
-    # ===== TEST =====
-    print("\n🚀 Training finished. Evaluating test set...")
+    # ===== LOAD BEST BEFORE TEST =====
+    best_ckpt_path = os.path.join(
+        config['MODEL_OUT'],
+        f"best_{config['METADATA_MODE']}.pt"
+    )
+
+    if os.path.exists(best_ckpt_path):
+        model.load_state_dict(
+            torch.load(best_ckpt_path, map_location=device)['state_dict']
+        )
+
+    print("\nTraining finished. Evaluating test set...")
 
     test_metrics = evaluate(model, test_loader, device, is_late_fusion)
 
-    test_csv_path = os.path.join(
-        config['MODEL_OUT'],
-        f"test_metrics_{config['METADATA_MODE']}_{log_suffix}.csv"
+    pd.DataFrame([test_metrics]).to_csv(
+        os.path.join(
+            config['MODEL_OUT'],
+            f"test_metrics_{log_suffix}.csv"
+        ),
+        index=False
     )
-    pd.DataFrame([test_metrics]).to_csv(test_csv_path, index=False)
-
-    print("Test AUC:", test_metrics['auc'])
 
     return model.state_dict(), history_data, test_metrics
