@@ -17,7 +17,7 @@ from src.data_logic.ham_dataset import HAM10000Dataset
 from src.models import get_model
 from src.utils.losses import FocalLoss
 from src.utils.common import seed_everything, get_warmup_cosine_scheduler, set_finetune_mode
-
+from src.utils.trainer import train_loop
 
 # ------------------- CHECK GPU -------------------
 def check_gpu_status():
@@ -42,15 +42,6 @@ CONFIG = {
     'SHORT_NAME': 'effb4',                 # Tên ngắn để lưu file
     
     'IMG_SIZE': 224, 
-    'BATCH_SIZE': 16, 
-    'BACKBONE': 'convnext',
-
-    # --- CẬP NHẬT CHIẾN LƯỢC HỌC (STRATEGY) ---
-    'EPOCHS': 20,           # Tăng lên 20 để hội tụ sâu hơn
-    'BASE_LR': 8e-5,        # Giảm mạnh (từ 5e-4 xuống 8e-5) để Loss mượt hơn
-    'WARMUP_EPOCHS': 3,     # Tăng Warmup lên 3 epoch đầu
-    'WEIGHT_DECAY': 1e-3,   # Tăng Weight Decay để chống Overfit mạnh hơn
-    # ------------------------------------------
     'BATCH_SIZE': 16,
     'EPOCHS': 20,
     'BASE_LR': 8e-5,        # Learning rate thấp hơn cho HAM
@@ -77,10 +68,6 @@ CONFIG = {
     'ENABLE_GRAD_CAM': True,
     'GRAD_CAM_FREQ': 5,  
 }
-if CONFIG["BACKBONE"] == "convnext":
-    from src.utils.trainer_convnext import train_loop
-else:
-    from src.utils.trainer import train_loop
 
 def preprocess_ham(df):
     df = df.copy()

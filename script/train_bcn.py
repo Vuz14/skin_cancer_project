@@ -17,7 +17,6 @@ from src.utils.losses import FocalLossBCE
 from src.data_logic.bcn_dataset import DermoscopyDataset
 from src.models import get_model
 from src.utils.common import seed_everything, get_warmup_cosine_scheduler, set_finetune_mode
-from src.utils.trainer import train_loop
 
 # ------------------- KIỂM TRA GPU -------------------
 def check_gpu_status():
@@ -32,35 +31,18 @@ def check_gpu_status():
 
 # ------------------- CONFIG -------------------
 CONFIG = {
-    'BACKBONE_TYPE': 'convnext',
     'TRAIN_CSV': r'D:\skin_cancer_project\dataset\metadata\bcn20000_train.csv',
     'VAL_CSV':   r'D:\skin_cancer_project\dataset\metadata\bcn20000_val.csv',
     'TEST_CSV':  r'D:\skin_cancer_project\dataset\metadata\bcn20000_test.csv',
     'IMG_ROOT':  r'D:\skin_cancer_project\dataset\Bcn20000-preprocessed',
     'MODEL_OUT': r'D:\skin_cancer_project\checkpoint_bcn20000',
-    'DEVICE': 'cuda' if torch.cuda.is_available() else 'cpu', 
-    'SEED': 42, 
-    'IMG_SIZE': 224, 
-    'BATCH_SIZE': 16, 
-    
-    'EPOCHS': 15,           
-    'BASE_LR': 5e-5,        
-    'WARMUP_EPOCHS': 3,     
-    'WEIGHT_DECAY': 1e-3,   
-    # --------------------------------------------------
-    'LABEL_SMOOTHING': 0.1,
-    'METADATA_MODE': 'full', 
+
     'DEVICE': 'cuda' if torch.cuda.is_available() else 'cpu',
     'SEED': 42,
-    'IMG_SIZE': 224,
-    'BATCH_SIZE': 32,
-
-    'EPOCHS': 20,
-
  
     # --- MODEL & NAMING ---
-    'MODEL_NAME': 'tf_efficientnet_b4_ns',
-    'SHORT_NAME': 'effb4',                 # Tên ngắn dùng để lưu file (effb4, res50)
+    'MODEL_NAME': 'convnext',
+    'SHORT_NAME': 'conv',                 # Tên ngắn dùng để lưu file (effb4, res50)
     
     'IMG_SIZE': 300,  # BCN20000 thường dùng ảnh lớn hơn HAM10000
     'BATCH_SIZE': 16,
@@ -89,12 +71,12 @@ CONFIG = {
     'GRAD_CAM_FREQ': 5,  
     'LOSS_TYPE': 'focal'
 }
-if CONFIG["BACKBONE_TYPE"] == "convnext":
+# chọn trainer theo MODEL_NAME (giữ nguyên workflow)
+if "convnext" in CONFIG["MODEL_NAME"].lower():
     from src.utils.trainer_convnext import train_loop
-    print("🔥 Trainer selected: trainer_convnext (ConvNeXt)")
 else:
     from src.utils.trainer import train_loop
-    print("🔥 Trainer selected: standard trainer")
+
 
 def preprocess_bcn(df):
     """Làm sạch dữ liệu cơ bản và tạo nhãn chuẩn"""
