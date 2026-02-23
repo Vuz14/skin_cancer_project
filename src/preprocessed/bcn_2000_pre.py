@@ -8,8 +8,8 @@ from tqdm import tqdm
 # CONFIG
 # =========================
 CSV_PATH = r"D:\skin_cancer_project\dataset\metadata\BCN20000_metadata.xlsx"
-IMG_ROOT = r"D:\skin_cancer_project\dataset\BCN_20000"
-OUT_DIR  = r"D:\skin_cancer_project\dataset\Bcn20000-preprocessed-1"
+IMG_ROOT = r"D:\skin_cancer_project\dataset\Bcn20k"
+OUT_DIR  = r"D:\skin_cancer_project\dataset\Bcn20000-preprocessed"
 IMG_SIZE = 224
 
 os.makedirs(OUT_DIR, exist_ok=True)

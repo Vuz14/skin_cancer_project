@@ -13,13 +13,16 @@ try:
     from pytorch_grad_cam import GradCAM
     from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
     from pytorch_grad_cam.utils.image import show_cam_on_image
+
     HAS_GRADCAM = True
 except ImportError:
     HAS_GRADCAM = False
 
+
 def calculate_specificity(y_true, y_pred):
     tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel() if len(set(y_true)) > 1 else (0, 0, 0, 0)
     return tn / (tn + fp + 1e-12) if (tn + fp) > 0 else 0.0
+
 
 def generate_gradcam(model, img_tensor, save_dir, idx):
     """
@@ -121,34 +124,38 @@ def generate_gradcam(model, img_tensor, save_dir, idx):
         cv2.cvtColor(cam_image, cv2.COLOR_RGB2BGR)
     )
 
-def plot_metrics_combined(history_data, test_metrics, out_dir, mode_name):
+
+def plot_metrics_combined(history_data, test_metrics, out_dir, mode_name, log_suffix=""):
     os.makedirs(out_dir, exist_ok=True)
     df = pd.DataFrame(history_data)
     epochs = df['epoch']
     metrics = ['loss', 'auc', 'acc', 'f1']
-    
+
     for metric in metrics:
         plt.figure(figsize=(10, 6))
         plt.plot(epochs, df[f'train_{metric}'], label=f'Train {metric.upper()}', marker='o')
         plt.plot(epochs, df[f'val_{metric}'], label=f'Val {metric.upper()}', marker='s')
-        
+
         test_val = test_metrics.get(metric)
         if test_val is not None:
             plt.axhline(y=test_val, color='r', linestyle='--', label=f'Test {metric.upper()} ({test_val:.4f})')
-        
-        plt.title(f'{metric.upper()} Comparison - {mode_name}')
+
+        plt.title(f'{metric.upper()} Comparison - {mode_name} ({log_suffix})')
         plt.xlabel('Epoch')
         plt.ylabel(metric.capitalize())
-        plt.legend(); plt.grid(True)
-        plt.savefig(os.path.join(out_dir, f"combined_{metric}_{mode_name}.png"), dpi=300, bbox_inches='tight')
+        plt.legend()
+        plt.grid(True)
+        # Lưu vào fold thư mục tương ứng
+        plt.savefig(os.path.join(out_dir, f"{metric}_{log_suffix}.png"), dpi=300, bbox_inches='tight')
         plt.close()
+
 
 def evaluate(model: nn.Module, loader, device='cpu', is_late_fusion=None):
     model.eval()
     loss_sum = 0.0
     all_probs, all_preds, all_targets = [], [], []
     bce = nn.BCEWithLogitsLoss(reduction='mean')
-    
+
     if is_late_fusion is None:
         is_late_fusion = hasattr(model, "metadata_mode") and model.metadata_mode == "late_fusion"
 
@@ -183,27 +190,35 @@ def evaluate(model: nn.Module, loader, device='cpu', is_late_fusion=None):
         'spec': calculate_specificity(y_true, all_preds)
     }
 
-def train_loop(model, train_loader, val_loader, test_loader, config, criterion, optimizer, scheduler, device, log_suffix=""):
+
+def train_loop(model, train_loader, val_loader, test_loader, config, criterion, optimizer, scheduler, device,
+               log_suffix=""):
     scaler = torch.amp.GradScaler('cuda', enabled=(device.type == 'cuda'))
     is_late_fusion = (config["METADATA_MODE"] == "late_fusion")
-    
+
+    # --- KHAI BÁO RUN_DIR CHO K-FOLD ---
+    # Lấy RUN_DIR từ config (thư mục fold_X), nếu không có thì lấy MODEL_OUT
+    run_dir = config.get('RUN_DIR', config['MODEL_OUT'])
+    os.makedirs(run_dir, exist_ok=True)
+
     best_val_auc = 0.0
     history_data = []
-    
+
     # --- Cấu hình Early Stopping ---
     patience = config.get('PATIENCE', 5)
     counter = 0
-    
-    history_csv = os.path.join(config['MODEL_OUT'], f"metrics_history_{config['METADATA_MODE']}_{log_suffix}.csv")
+
+    # Lưu history vào đúng thư mục Fold (run_dir)
+    history_csv = os.path.join(run_dir, f"history_{config['METADATA_MODE']}_{log_suffix}.csv")
 
     for epoch in range(1, config['EPOCHS'] + 1):
         model.train()
         train_loss_sum = 0.0
-        
+
         for imgs, meta, labels in tqdm(train_loader, desc=f"Epoch {epoch}"):
             imgs, labels = imgs.to(device), labels.to(device).float().view(-1, 1)
             optimizer.zero_grad(set_to_none=True)
-            
+
             with torch.amp.autocast('cuda', enabled=(device.type == 'cuda')):
                 if is_late_fusion:
                     meta_vec, _ = meta
@@ -211,18 +226,18 @@ def train_loop(model, train_loader, val_loader, test_loader, config, criterion, 
                 else:
                     m_num, m_cat = meta
                     logits = model(imgs, m_num.to(device).float(), m_cat.to(device).long())
-                
+
                 # Áp dụng Label Smoothing nếu cấu hình
                 smooth = config.get('LABEL_SMOOTHING', 0.0)
                 labels_smooth = labels * (1 - smooth) + 0.5 * smooth
                 loss = criterion(logits, labels_smooth)
 
             scaler.scale(loss).backward()
-            
+
             # Unscale để thực hiện Gradient Clipping
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0) 
-            
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
             scaler.step(optimizer)
             scaler.update()
             train_loss_sum += loss.item() * imgs.size(0)
@@ -230,7 +245,7 @@ def train_loop(model, train_loader, val_loader, test_loader, config, criterion, 
         # Đánh giá Metrics
         train_res = evaluate(model, train_loader, device, is_late_fusion)
         val_res = evaluate(model, val_loader, device, is_late_fusion)
-        
+
         # Log kết quả
         epoch_row = {'epoch': epoch}
         epoch_row.update({f'train_{k}': v for k, v in train_res.items()})
@@ -246,13 +261,14 @@ def train_loop(model, train_loader, val_loader, test_loader, config, criterion, 
                 scheduler.step(val_res['auc'])
             else:
                 scheduler.step()
-        
+
         # --- Logic Early Stopping & Lưu Model ---
         if val_res['auc'] > best_val_auc:
             best_val_auc = val_res['auc']
             counter = 0
-            torch.save({'state_dict': model.state_dict()}, 
-                       os.path.join(config['MODEL_OUT'], f"best_{config['METADATA_MODE']}.pt"))
+            # SỬA LỖI LƯU MODEL: Thêm log_suffix vào tên file và lưu vào run_dir
+            torch.save({'state_dict': model.state_dict()},
+                       os.path.join(run_dir, f"best_{config['METADATA_MODE']}_{log_suffix}.pt"))
         else:
             counter += 1
             if counter >= patience:
@@ -261,22 +277,29 @@ def train_loop(model, train_loader, val_loader, test_loader, config, criterion, 
 
         # Grad-CAM visualization
         if HAS_GRADCAM and epoch % config.get('GRADCAM_SAVE_EVERY', 5) == 0:
-            save_dir = os.path.join(config['MODEL_OUT'], f"gradcam_ep{epoch}")
+            save_dir = os.path.join(run_dir, f"gradcam_ep{epoch}")
             val_batch = next(iter(val_loader))
             val_imgs = val_batch[0]
             model.eval()
             for idx in range(min(4, len(val_imgs))):
-                generate_gradcam(model, val_imgs[idx:idx+1], save_dir, idx)
+                generate_gradcam(model, val_imgs[idx:idx + 1], save_dir, idx)
             model.train()
 
-    # Tải lại trọng số tốt nhất trước khi test
-    best_ckpt_path = os.path.join(config['MODEL_OUT'], f"best_{config['METADATA_MODE']}.pt")
+    # --- SỬA LỖI TẢI LẠI MODEL TRƯỚC KHI TEST ---
+    # Phải load chính xác file vừa lưu ở trên
+    best_ckpt_path = os.path.join(run_dir, f"best_{config['METADATA_MODE']}_{log_suffix}.pt")
     if os.path.exists(best_ckpt_path):
         model.load_state_dict(torch.load(best_ckpt_path, map_location=device)['state_dict'])
+    else:
+        print(f"⚠️ Cảnh báo: Không tìm thấy file model tốt nhất tại {best_ckpt_path}")
 
     print("\n🚀 Huấn luyện hoàn tất. Đánh giá trên tập Test...")
     test_metrics = evaluate(model, test_loader, device, is_late_fusion)
-    pd.DataFrame([test_metrics]).to_csv(os.path.join(config['MODEL_OUT'], f"test_metrics_{log_suffix}.csv"), index=False)
-    
-    plot_metrics_combined(history_data, test_metrics, config['MODEL_OUT'], config['METADATA_MODE'])
+
+    # Lưu test metrics vào thư mục Fold
+    pd.DataFrame([test_metrics]).to_csv(os.path.join(run_dir, f"test_metrics_{log_suffix}.csv"), index=False)
+
+    # Plot metrics và lưu vào thư mục Fold
+    plot_metrics_combined(history_data, test_metrics, run_dir, config['METADATA_MODE'], log_suffix)
+
     return model.state_dict(), history_data, test_metrics
