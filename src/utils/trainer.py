@@ -21,7 +21,10 @@ except ImportError:
 
 
 def calculate_specificity(y_true, y_pred):
-    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel() if len(set(y_true)) > 1 else (0, 0, 0, 0)
+    if len(set(y_true)) > 1:
+        tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+    else:
+        return 0.0
     return tn / (tn + fp + 1e-12) if (tn + fp) > 0 else 0.0
 
 
@@ -48,11 +51,14 @@ def generate_gradcam(model, img_tensor, save_dir, idx):
     target_layer = None
     layer_name = "unknown"
     try:
-        if hasattr(model.backbone, 'model'):
+        eff = None
+        if hasattr(model, 'backbone') and hasattr(model.backbone, 'model'):
             eff = model.backbone.model
-        if hasattr(eff, 'conv_head'): target_layer = eff.conv_head; layer_name = "eff_conv_head"
-        elif hasattr(eff, 'blocks'): target_layer = eff.blocks[-1]; layer_name = "eff_blocks[-1]"
-        elif hasattr(model.backbone, 'backbone') and hasattr(model.backbone.backbone, 'layer4'):
+        
+        if eff:
+            if hasattr(eff, 'conv_head'): target_layer = eff.conv_head; layer_name = "eff_conv_head"
+            elif hasattr(eff, 'blocks'): target_layer = eff.blocks[-1]; layer_name = "eff_blocks[-1]"
+        elif hasattr(model, 'backbone') and hasattr(model.backbone, 'backbone') and hasattr(model.backbone.backbone, 'layer4'):
             target_layer = model.backbone.backbone.layer4[-1]; layer_name = "resnet_layer4"
     except Exception as e: return
 
@@ -101,12 +107,14 @@ def plot_metrics_combined(history_data, test_metrics, out_dir, mode_name, log_su
         plt.ylabel(metric.capitalize())
         plt.legend()
         plt.grid(True)
-        # Lưu vào fold thư mục tương ứng
         plt.savefig(os.path.join(out_dir, f"{metric}_{log_suffix}.png"), dpi=300, bbox_inches='tight')
         plt.close()
 
 
-def evaluate(model: nn.Module, loader, device='cpu', is_late_fusion=None):
+def evaluate(model: nn.Module, loader, device='cpu', is_late_fusion=None, find_best_threshold=False):
+    """
+    Hàm evaluate đã được sửa lỗi NameError và logic threshold.
+    """
     model.eval()
     loss_sum = 0.0
     all_probs, all_targets = [], []
@@ -130,44 +138,47 @@ def evaluate(model: nn.Module, loader, device='cpu', is_late_fusion=None):
             loss = bce(logits, labels)
             loss_sum += loss.item() * imgs.size(0)
             probs = torch.sigmoid(logits).cpu().numpy().reshape(-1)
-            all_probs.extend(probs.tolist()); all_targets.extend(labels.cpu().numpy().reshape(-1).tolist())
+            all_probs.extend(probs.tolist())
+            all_targets.extend(labels.cpu().numpy().reshape(-1).tolist())
 
     y_true, y_probs = np.array(all_targets), np.array(all_probs)
     auc = roc_auc_score(y_true, y_probs) if len(set(y_true)) > 1 else 0.0
 
+    # Mặc định threshold là 0.5
+    threshold = 0.5
     if find_best_threshold and len(set(y_true)) > 1:
         fpr, tpr, thresholds = roc_curve(y_true, y_probs)
         youden_index = tpr - fpr
         threshold = thresholds[np.argmax(youden_index)]
-        print(f"🔥 Best threshold found on Val: {threshold:.4f}")
+        print(f"🔥 Best threshold found: {threshold:.4f}")
 
     y_pred = (y_probs >= threshold).astype(int)
     return {
-        'loss': loss_sum / len(loader.dataset), 'auc': auc, 'acc': accuracy_score(y_true, y_pred),
-        'f1': f1_score(y_true, y_pred, zero_division=0), 'precision': precision_score(y_true, y_pred, zero_division=0),
-        'recall': recall_score(y_true, y_pred, zero_division=0), 'spec': calculate_specificity(y_true, y_pred),
+        'loss': loss_sum / len(loader.dataset), 
+        'auc': auc, 
+        'acc': accuracy_score(y_true, y_pred),
+        'f1': f1_score(y_true, y_pred, zero_division=0), 
+        'precision': precision_score(y_true, y_pred, zero_division=0),
+        'recall': recall_score(y_true, y_pred, zero_division=0), 
+        'spec': calculate_specificity(y_true, y_pred),
         'threshold': threshold
     }
 
 
 def train_loop(model, train_loader, val_loader, test_loader, config, criterion, optimizer, scheduler, device,
-               log_suffix=""):
+                log_suffix=""):
     scaler = torch.amp.GradScaler('cuda', enabled=(device.type == 'cuda'))
     is_late_fusion = (config["METADATA_MODE"] == "late_fusion")
 
-    # --- KHAI BÁO RUN_DIR CHO K-FOLD ---
-    # Lấy RUN_DIR từ config (thư mục fold_X), nếu không có thì lấy MODEL_OUT
     run_dir = config.get('RUN_DIR', config['MODEL_OUT'])
     os.makedirs(run_dir, exist_ok=True)
 
     best_val_auc = 0.0
     history_data = []
 
-    # --- Cấu hình Early Stopping ---
     patience = config.get('PATIENCE', 5)
     counter = 0
 
-    # Lưu history vào đúng thư mục Fold (run_dir)
     history_csv = os.path.join(run_dir, f"history_{config['METADATA_MODE']}_{log_suffix}.csv")
 
     for epoch in range(1, config['EPOCHS'] + 1):
@@ -185,51 +196,45 @@ def train_loop(model, train_loader, val_loader, test_loader, config, criterion, 
                     m_num, m_cat = meta
                     logits = model(imgs, m_num.to(device).float(), m_cat.to(device).long())
 
-                # Áp dụng Label Smoothing nếu cấu hình
                 smooth = config.get('LABEL_SMOOTHING', 0.0)
                 labels_smooth = labels * (1 - smooth) + 0.5 * smooth
                 loss = criterion(logits, labels_smooth)
 
             scaler.scale(loss).backward()
-
-            # Unscale để thực hiện Gradient Clipping
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
             scaler.step(optimizer)
             scaler.update()
             train_loss_sum += loss.item() * imgs.size(0)
 
-        train_res = evaluate(model, train_loader, device, is_late_fusion)
-        val_res = evaluate(model, val_loader, device, is_late_fusion)
+        # Sửa lỗi: Truyền find_best_threshold=True cho Val để tối ưu kết quả
+        train_res = evaluate(model, train_loader, device, is_late_fusion, find_best_threshold=False)
+        val_res = evaluate(model, val_loader, device, is_late_fusion, find_best_threshold=True)
 
-        # Log kết quả
         epoch_row = {'epoch': epoch}
         epoch_row.update({f'train_{k}': v for k, v in train_res.items()})
         epoch_row.update({f'val_{k}': v for k, v in val_res.items()})
         history_data.append(epoch_row)
         pd.DataFrame(history_data).to_csv(history_csv, index=False)
 
-        print(f"Epoch {epoch} | Val AUC: {val_res['auc']:.4f} | Val Loss: {val_res['loss']:.4f}")
+        print(f"Epoch {epoch} | Val AUC: {val_res['auc']:.4f} | Val Loss: {val_res['loss']:.4f} | Best Thr: {val_res['threshold']:.4f}")
+        
         if scheduler:
-            # Nếu dùng ReduceLROnPlateau thì cần truyền val_loss
             if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
                 scheduler.step(val_res['auc'])
             else:
                 scheduler.step()
 
-        # --- Logic Early Stopping & Lưu Model ---
         if val_res['auc'] > best_val_auc:
             best_val_auc = val_res['auc']
             counter = 0
-            # SỬA LỖI LƯU MODEL: Thêm log_suffix vào tên file và lưu vào run_dir
             torch.save({'state_dict': model.state_dict()},
                        os.path.join(run_dir, f"best_{config['METADATA_MODE']}_{log_suffix}.pt"))
         else:
             counter += 1
-            if counter >= patience: print(f"🛑 Early stopping."); break
+            if counter >= patience: 
+                print(f"🛑 Early stopping."); break
 
-        # Grad-CAM visualization
         if HAS_GRADCAM and epoch % config.get('GRADCAM_SAVE_EVERY', 5) == 0:
             save_dir = os.path.join(run_dir, f"gradcam_ep{epoch}")
             val_batch = next(iter(val_loader))
@@ -238,8 +243,6 @@ def train_loop(model, train_loader, val_loader, test_loader, config, criterion, 
                 generate_gradcam(model, val_imgs[idx:idx + 1], save_dir, idx)
             model.train()
 
-    # --- SỬA LỖI TẢI LẠI MODEL TRƯỚC KHI TEST ---
-    # Phải load chính xác file vừa lưu ở trên
     best_ckpt_path = os.path.join(run_dir, f"best_{config['METADATA_MODE']}_{log_suffix}.pt")
     if os.path.exists(best_ckpt_path):
         model.load_state_dict(torch.load(best_ckpt_path, map_location=device)['state_dict'])
@@ -247,12 +250,11 @@ def train_loop(model, train_loader, val_loader, test_loader, config, criterion, 
         print(f"⚠️ Cảnh báo: Không tìm thấy file model tốt nhất tại {best_ckpt_path}")
 
     print("\n🚀 Huấn luyện hoàn tất. Đánh giá trên tập Test...")
-    test_metrics = evaluate(model, test_loader, device, is_late_fusion)
+    # Khi đánh giá Test, ta có thể dùng threshold mặc định 0.5 hoặc threshold tối ưu từ tập Val. 
+    # Ở đây mình để mặc định 0.5 cho khách quan.
+    test_metrics = evaluate(model, test_loader, device, is_late_fusion, find_best_threshold=False)
 
-    # Lưu test metrics vào thư mục Fold
     pd.DataFrame([test_metrics]).to_csv(os.path.join(run_dir, f"test_metrics_{log_suffix}.csv"), index=False)
-
-    # Plot metrics và lưu vào thư mục Fold
     plot_metrics_combined(history_data, test_metrics, run_dir, config['METADATA_MODE'], log_suffix)
 
     return model.state_dict(), history_data, test_metrics
