@@ -1,15 +1,21 @@
-import os, cv2, numpy as np, pandas as pd
-from tqdm import tqdm
-from skimage import morphology
+import cv2
+import numpy as np
+import os
+import pandas as pd
 import sys
+
+from skimage import morphology
+from tqdm import tqdm
+
 sys.path.append(r"C:\Users\ADMIN\PycharmProjects\NCKH_Test\U-2-Net-master")
 
 import torch
+
 # === Config ===
 # (Giữ nguyên Config)
-CSV_PATH = r"C:\Users\ADMIN\PycharmProjects\NCKH_Test\ham10000_processed.csv"
-IMG_ROOT = r"C:\Users\ADMIN\PycharmProjects\NCKH_Test\image"
-OUT_DIR = r"C:\Users\ADMIN\PycharmProjects\NCKH_Test\Ham10000-preprocessed"  # Đổi tên thư mục OUT để tránh ghi đè
+CSV_PATH = r"D:\skin_cancer_project\dataset\metadata\HAM10000_metadata.csv"
+IMG_ROOT = r"D:\skin_cancer_project\dataset\Ham10k"
+OUT_DIR = r"D:\skin_cancer_project\dataset\Ham10000-preprocessed"  # Đổi tên thư mục OUT để tránh ghi đè
 IMG_SIZE = 224
 
 os.makedirs(OUT_DIR, exist_ok=True)
@@ -63,7 +69,7 @@ def smooth_image(img):
     # Sử dụng Bilateral Filter: d=9, sigmaColor=75, sigmaSpace=75
     # Tinh chỉnh: Giảm sigmaColor và sigmaSpace để làm mịn ít hơn, giữ lại chi tiết
     # Thử nghiệm với (50, 50) hoặc (60, 60)
-    return cv2.bilateralFilter(img, d=9, sigmaColor=60, sigmaSpace=60) # Ví dụ
+    return cv2.bilateralFilter(img, d=9, sigmaColor=60, sigmaSpace=60)  # Ví dụ
 
 
 # === Main preprocessing ===
