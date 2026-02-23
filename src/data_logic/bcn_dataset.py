@@ -12,9 +12,7 @@ from albumentations.pytorch import ToTensorV2
 class DermoscopyDataset(Dataset):
     def __init__(self, df: pd.DataFrame, img_root: str, img_size: int, metadata_mode: str = 'diag1', 
                  train: bool = True, selected_features: Optional[list] = None):
-        """
-        Dataset chuẩn cho BCN20000 / ISIC 2019 - Fix lỗi Index & Albumentations API
-        """
+    
         self.df = df.copy().reset_index(drop=True)
         self.df.columns = self.df.columns.str.strip()
         

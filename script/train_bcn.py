@@ -51,7 +51,7 @@ CONFIG = {
     'WARMUP_EPOCHS': 3,
     'WEIGHT_DECAY': 1e-3,
 
-    'METADATA_MODE': 'diag1', 
+    'METADATA_MODE': 'late_fusion',
     'METADATA_FEATURE_BOOST': 2.0,
     'META_CLASS_WEIGHT_BOOST': 1.2, 
     'PRETRAINED': True,

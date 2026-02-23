@@ -12,14 +12,13 @@ class MultimodalClassifier(nn.Module):
         self.num_numeric = num_numeric
         self.cat_cardinalities = cat_cardinalities or {}
         self.emb_dim = emb_dim
-        self.meta_weight = meta_weight
+        self.meta_weight = meta_weight # Trọng số điều chỉnh mức độ ảnh hưởng của FiLM
 
         # --- CHỌN BACKBONE ---
         if 'resnet' in model_name.lower():
             self.backbone = ResNet50Backbone(model_name, pretrained)
         else:
             self.backbone = EfficientNetBackbone(model_name, pretrained)
-
         self.img_features_dim = self.backbone.num_features
 
         # --- CẤU HÌNH METADATA ---
@@ -34,7 +33,7 @@ class MultimodalClassifier(nn.Module):
 
         if use_metadata:
             input_meta_dim = total_emb_dim + max(0, num_numeric)
-            # FiLM generator: generates gamma and beta for modulation
+            # FiLM generator: Tạo gamma và beta
             self.film_generator = nn.Sequential(
                 nn.Linear(input_meta_dim, 128),
                 nn.BatchNorm1d(128),
@@ -42,10 +41,9 @@ class MultimodalClassifier(nn.Module):
                 nn.Dropout(0.5),
                 nn.Linear(128, 64),
                 nn.ReLU(),
-                nn.Dropout(0.3),
                 nn.Linear(64, self.img_features_dim * 2)
             )
-            # Initialize FiLM parameters to zero (identity transformation initially)
+            # Khởi tạo về 0 để ban đầu mô hình coi như chưa có metadata
             self.film_generator[-1].weight.data.zero_()
             self.film_generator[-1].bias.data.zero_()
             
@@ -60,10 +58,8 @@ class MultimodalClassifier(nn.Module):
                 nn.Dropout(0.4),
                 nn.Linear(128, num_classes)
             )
-            self.metadata_mlp = None  # Not used with FiLM
         else:
             self.film_generator = None
-            self.metadata_mlp = None
             self.classifier = nn.Sequential(
                 nn.Linear(self.img_features_dim, 256),
                 nn.ReLU(),
@@ -75,27 +71,26 @@ class MultimodalClassifier(nn.Module):
         if x_img.dtype == torch.float16: x_img = x_img.float()
         feat_img = self.backbone(x_img)
 
-        # Kiểm tra tính hợp lệ của metadata đầu vào
+        # Check nelement chuẩn như code cũ của bạn
         has_meta_input = (meta_num is not None and meta_num.nelement() > 0) and \
                          (meta_cat is not None and meta_cat.nelement() > 0)
 
         if self.use_metadata and has_meta_input:
             # 1. Xử lý Categorical
             emb_list = [self.emb_layers[c](meta_cat[:, i]) for i, c in enumerate(self.cat_names)]
-            emb_concat = torch.cat(emb_list, dim=1) if emb_list else torch.zeros((feat_img.size(0), 0), device=feat_img.device)
+            emb_concat = torch.cat(emb_list, dim=1)
 
             # 2. Kết hợp với Numeric
             meta_input = torch.cat([meta_num, emb_concat], dim=1) if self.num_numeric > 0 else emb_concat
             if meta_input.dtype == torch.float16: meta_input = meta_input.float()
 
-            # FiLM: Generate gamma and beta from metadata
+            # 3. FiLM modulation: (1 + gamma * weight) * feat + (beta * weight)
             film_params = self.film_generator(meta_input)
             gamma, beta = torch.split(film_params, self.img_features_dim, dim=1)
             
-            # Apply FiLM modulation: (1 + gamma) * feat + beta
-            feat = (1 + gamma) * feat_img + beta
+            # Cải tiến: Thêm meta_weight để điều tiết sức mạnh của metadata
+            feat = (1 + gamma * self.meta_weight) * feat_img + (beta * self.meta_weight)
         else:
-            # Mode diag1: Bỏ qua hoàn toàn metadata
             feat = feat_img
 
         return self.classifier(feat)
@@ -111,14 +106,12 @@ class DualEmbeddingFusion(nn.Module):
         self.cat_names = list(self.cat_cardinalities.keys())
         self.emb_dim = emb_dim
 
-        # Backbone
         if 'resnet' in model_name.lower():
             self.backbone = ResNet50Backbone(model_name, pretrained)
         else:
             self.backbone = EfficientNetBackbone(model_name, pretrained)
         self.img_dim = self.backbone.num_features
 
-        # Embedding logic
         self.emb_layers = nn.ModuleDict()
         total_emb_dim = 0
         for cname in self.cat_names:
@@ -161,15 +154,25 @@ class DualEmbeddingFusion(nn.Module):
     def forward(self, x_img, meta_num=None, meta_cat=None):
         feat_img = self.backbone(x_img)
 
-        # Kiểm tra nelement() để biết tensor có rỗng hay không
-        has_meta = (meta_num is not None and meta_num.nelement() > 0)
+        has_meta = (meta_num is not None and meta_num.nelement() > 0) and \
+                   (meta_cat is not None and meta_cat.nelement() > 0)
 
         if self.use_metadata and has_meta:
-            # Xử lý metadata như bình thường...
-            # feat_meta = self.metadata_mlp(...)
-            feat = torch.cat([feat_img, feat_meta], dim=1)
+            # FIX LỖI "feat_meta is not defined":
+            emb_list = [self.emb_layers[c](meta_cat[:, i]) for i, c in enumerate(self.cat_names)]
+            emb_concat = torch.cat(emb_list, dim=1)
+            meta_input = torch.cat([meta_num, emb_concat], dim=1) if self.num_numeric > 0 else emb_concat
+            
+            # Tính toán feat_meta từ dữ liệu đầu vào
+            feat_meta = self.meta_mlp(meta_input.float())
+
+            feat_img_proj = self.img_embed(feat_img)
+            gate_input = torch.cat([feat_img_proj, feat_meta], dim=1)
+            gate_score = torch.sigmoid(self.gate(gate_input))
+            
+            # Gating Fusion
+            feat = gate_score * feat_img_proj + (1 - gate_score) * feat_meta
         else:
-            # Ngắt metadata hoàn toàn
-            feat = feat_img
+            feat = self.img_embed(feat_img) if self.use_metadata else feat_img
 
         return self.classifier(feat)
