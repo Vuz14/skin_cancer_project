@@ -22,8 +22,15 @@ class MultimodalClassifier(nn.Module):
         self.meta_weight = meta_weight
 
         # --- LOGIC CHỌN BACKBONE ---
-        if 'resnet' in model_name.lower():
+        model_name_lower = model_name.lower()
+
+        if 'convnext' in model_name_lower:
+            from .backbone.convnextLarge import ConvNeXtBackbone
+            self.backbone = ConvNeXtBackbone(model_name, pretrained)
+
+        elif 'resnet' in model_name_lower:
             self.backbone = ResNet50Backbone(model_name, pretrained)
+
         else:
             self.backbone = EfficientNetBackbone(model_name, pretrained)
 
@@ -106,6 +113,7 @@ class MultimodalClassifier(nn.Module):
 class DualEmbeddingFusion(nn.Module):
     def __init__(
         self,
+        model_name='tf_efficientnet_b4_ns',
         pretrained=True,
         cat_cardinalities=None,
         num_numeric=0,
@@ -123,7 +131,18 @@ class DualEmbeddingFusion(nn.Module):
         self.emb_dim = emb_dim
 
         # ===== IMAGE BACKBONE =====
-        self.backbone = EfficientNetBackbone('tf_efficientnet_b4_ns', pretrained)
+        model_name_lower = model_name.lower()
+
+        if 'convnext' in model_name_lower:
+            from .backbone.convnextLarge import ConvNeXtBackbone
+            self.backbone = ConvNeXtBackbone(model_name, pretrained)
+
+        elif 'resnet' in model_name_lower:
+            self.backbone = ResNet50Backbone(model_name, pretrained)
+
+        else:
+            self.backbone = EfficientNetBackbone(model_name, pretrained)
+
         self.img_dim = self.backbone.num_features
 
         # ===== CATEGORICAL EMBEDDINGS =====

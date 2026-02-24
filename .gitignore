@@ -27,6 +27,7 @@ D:/NCKH_Checkpoints_*/
 D:/skin_cancer_project/checkpoint_bcn20000/
 D:/skin_cancer_project/checkpoint_ham10000/
 *.json
+*.pkl
 # --- LOG & IDE CONFIG ---
 wandb/
 .idea/
