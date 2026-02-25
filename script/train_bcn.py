@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader
 # Thêm đường dẫn gốc của dự án để import các module nội bộ
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from src.utils.losses import FocalLossBCE
+from src.utils.losses import FocalLoss
 from src.data_logic.bcn_dataset import DermoscopyDataset
 from src.models import get_model
 from src.utils.common import seed_everything, get_warmup_cosine_scheduler, set_finetune_mode
@@ -48,7 +48,7 @@ CONFIG = {
     'SEED': 42,
 
     # --- MODEL---
-    'MODEL_NAME': 'convnext',
+    'MODEL_NAME': 'convnext_large',
     'SHORT_NAME': 'convext_bcn',
     'IMG_SIZE': 224,
     'BATCH_SIZE': 32, # 32 là mức an toàn cho ảnh 224x224 trên hầu hết GPU

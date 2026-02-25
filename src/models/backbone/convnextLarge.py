@@ -1,20 +1,20 @@
-import torch
+import timm
 import torch.nn as nn
-from torchvision import models
 
 class ConvNeXtBackbone(nn.Module):
-    def __init__(self, model_name='convnext_large', pretrained=True):
+    def __init__(self, model_name="convnext_large", pretrained=True):
         super().__init__()
-        # Khởi tạo model từ torchvision (giống code Colab của bạn)
-        if model_name == 'convnext_large':
-            weights = "IMAGENET1K_V1" if pretrained else None
-            self.backbone = models.convnext_large(weights=weights)
-        
-        # Lấy số feature đầu ra (thường là 1536 với bản Large)
-        self.num_features = self.backbone.classifier[2].in_features
-        
-        # Loại bỏ lớp classifier gốc để lấy raw features (Identity)
-        self.backbone.classifier[2] = nn.Identity()
+
+        # ✅ tạo backbone
+        self.backbone = timm.create_model(
+            model_name,
+            pretrained=pretrained,
+            num_classes=0,   # remove classifier
+            global_pool="avg"
+        )
+
+        # ✅ số feature output
+        self.num_features = self.backbone.num_features
 
     def forward(self, x):
         return self.backbone(x)

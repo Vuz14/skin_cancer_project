@@ -120,7 +120,8 @@ class DualEmbeddingFusion(nn.Module):
         num_classes=1,
         embed_dim=256,
         meta_weight=1.0,
-        emb_dim=8
+        emb_dim=8,
+        use_metadata=True
     ):
         super().__init__()
 
