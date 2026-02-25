@@ -3,12 +3,9 @@ from typing import Dict, Tuple, Optional
 
 import numpy as np
 import pandas as pd
-from torch.utils.data import Dataset
 import torch
 from PIL import Image
 from sklearn.preprocessing import LabelEncoder
-import albumentations as A
-from albumentations.pytorch import ToTensorV2
 from torch.utils.data import Dataset
 
 # --- THÊM IMPORT ALBUMENTATIONS ĐÚNG CHUẨN ---
@@ -24,6 +21,8 @@ class HAM10000Dataset(Dataset):
     def __init__(self, df: pd.DataFrame, img_root: str, img_size: int, metadata_mode: str = 'diag1',
                  train: bool = True, selected_features: Optional[list] = None,
                  external_encoders=None, external_stats=None):
+
+        # Làm sạch tên cột và tạo bản sao để tránh rò rỉ dữ liệu
         self.df = df.copy().reset_index(drop=True)
         self.df.columns = self.df.columns.str.strip()
 
@@ -31,6 +30,7 @@ class HAM10000Dataset(Dataset):
         self.img_size = img_size
         self.train = train
         self.metadata_mode = metadata_mode
+
         # --- TỰ ĐỘNG XỬ LÝ CỘT CHO HAM10000 ---
         if 'image_path' not in self.df.columns and 'image_id' in self.df.columns:
             self.df['image_path'] = self.df['image_id'].astype(str) + '.jpg'
@@ -58,22 +58,6 @@ class HAM10000Dataset(Dataset):
         # 1. KHỞI TẠO ENCODERS & STATS
         # ==========================================================
         if self.metadata_mode in ('full', 'full_weighted', 'late_fusion'):
-            for c in self.categorical_cols:
-                # Fill NA bằng 'unknown' cho categorical
-                vals = self.df[c].fillna('unknown').astype(str).values
-                le = LabelEncoder()
-                le.fit(vals)
-                self.encoders[c] = le
-                self.cat_cardinalities[c] = len(le.classes_)
-            
-            for nc in self.numeric_cols:
-                # Fill NA bằng mean cho numeric
-                arr = pd.to_numeric(self.df[nc], errors='coerce')
-                mean = float(np.nanmean(arr)) if not np.all(np.isnan(arr)) else 0.0
-                std = float(np.nanstd(arr)) + 1e-6 if not np.all(np.isnan(arr)) else 1.0
-                self.num_mean_std[nc] = (mean, std)
-
-        # --- AUGMENTATION (Albumentations - Đồng bộ với BCN) ---
             # Ưu tiên dùng Encoder/Stats truyền từ ngoài (Khi Test)
             if external_encoders and external_stats:
                 self.encoders = external_encoders
@@ -105,9 +89,6 @@ class HAM10000Dataset(Dataset):
                 A.HorizontalFlip(p=0.5),
                 A.VerticalFlip(p=0.5),
                 A.RandomRotate90(p=0.5),
-                A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.1, rotate_limit=45, p=0.5),
-                A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.5),
-                A.CoarseDropout(max_holes=8, max_height=img_size//10, max_width=img_size//10, p=0.3),
                 A.Affine(
                     scale=(0.9, 1.1),
                     translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)},
@@ -156,9 +137,6 @@ class HAM10000Dataset(Dataset):
         cats = []
         for cc in self.categorical_cols:
             raw = str(row.get(cc, 'unknown'))
-            le = self.encoders[cc]
-            try: idx = int(le.transform([raw])[0])
-            except: idx = 0 # Fallback cho unknown classes
             if cc in self.encoders:
                 le = self.encoders[cc]
                 try:
@@ -173,10 +151,6 @@ class HAM10000Dataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        # Albumentations cần input là numpy array
-        img_np = np.array(self._load_image(row['image_path']))
-        augmented = self.transform(image=img_np)
-        img = augmented['image']
 
         # --- SỬA LỖI TRUYỀN ẢNH VÀO ALBUMENTATIONS ---
         img_pil = self._load_image(row['image_path'])
@@ -184,6 +158,7 @@ class HAM10000Dataset(Dataset):
         augmented = self.transform(image=img_np)  # Truyền theo keyword argument
         img = augmented['image']  # Lấy tensor ảnh ra từ dictionary
         # ----------------------------------------------
+
         label = torch.tensor(int(row['label']), dtype=torch.float32)
         meta_num, meta_cat = self._encode_metadata(row)
 
