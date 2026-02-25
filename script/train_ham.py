@@ -47,8 +47,8 @@ CONFIG = {
     'SEED': 42,
 
     # --- MODEL & NAMING ---
-    'MODEL_NAME': 'resnet50',
-    'SHORT_NAME': 'resnet50_ham',
+    'MODEL_NAME': 'convnext',
+    'SHORT_NAME': 'convnext_ham',
 
     'IMG_SIZE': 224,
     'BATCH_SIZE': 32,  # Khuyên dùng 32 để tránh tràn RAM

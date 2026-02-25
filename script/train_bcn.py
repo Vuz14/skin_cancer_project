@@ -48,8 +48,8 @@ CONFIG = {
     'SEED': 42,
 
     # --- MODEL---
-    'MODEL_NAME': 'resnet50',
-    'SHORT_NAME': 'resnet50_bcn',
+    'MODEL_NAME': 'convnext',
+    'SHORT_NAME': 'convext_bcn',
     'IMG_SIZE': 224,
     'BATCH_SIZE': 32, # 32 là mức an toàn cho ảnh 224x224 trên hầu hết GPU
 
