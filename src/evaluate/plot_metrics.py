@@ -1,5 +1,6 @@
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib as mpl
 import os
 import numpy as np
 import sys
@@ -13,7 +14,16 @@ if sys.platform == 'win32':
 # Thiết lập style cho matplotlib
 plt.style.use('seaborn-v0_8-darkgrid')
 colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']  # Màu cho 4 mode
-mode_labels = ['Mode 1', 'Mode 2', 'Mode 3', 'Mode 4']
+mode_labels = ['Strategy 1', 'Strategy 2', 'Strategy 3', 'Strategy 4']
+
+mpl.rcParams.update({
+    'font.size': 13,
+    'axes.titlesize': 18,
+    'axes.labelsize': 14,
+    'xtick.labelsize': 13,
+    'ytick.labelsize': 13,
+    'legend.fontsize': 12,
+})
 
 def read_history_data(base_path, dataset_folder, dataset_code, model_name='effb4'):
     """
@@ -111,7 +121,7 @@ def plot_training_metrics(history_data, metric_name, dataset_name, model_name, o
             epochs = df_filtered['epoch'].values
             values = df_filtered[metric_name].values
             plt.plot(epochs, values, color=colors[mode_idx-1], 
-                    label=mode_labels[mode_idx-1], linewidth=2, marker='o', markersize=4)
+                    label=mode_labels[mode_idx-1], linewidth=2, marker='o', markersize=6)
     
     plt.xlabel('Epoch', fontsize=12, fontweight='bold')
     
@@ -141,7 +151,7 @@ def plot_training_metrics(history_data, metric_name, dataset_name, model_name, o
         phase = ''
     
     title = f'{phase} {metric_title} - {dataset_name} ({model_name.upper()})'
-    plt.title(title, fontsize=14, fontweight='bold')
+    plt.title(title, fontsize=18, fontweight='bold')
     
     plt.legend(loc='best', fontsize=10)
     plt.grid(True, alpha=0.3)
@@ -157,7 +167,7 @@ def plot_test_metrics(test_data, metric_name, dataset_name, model_name, output_d
     """
     Vẽ biểu đồ đường cho các chỉ số test (1 giá trị cho mỗi mode)
     """
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(12, 7))
     
     modes = []
     values = []
@@ -178,10 +188,10 @@ def plot_test_metrics(test_data, metric_name, dataset_name, model_name, output_d
     for i, (mode, value, color) in enumerate(zip(modes, values, plot_colors)):
         plt.scatter(mode, value, color=color, s=150, zorder=5, label=mode_labels[mode-1], edgecolors='black', linewidths=1.5)
         plt.annotate(f'{value:.4f}', (mode, value), textcoords="offset points", 
-                    xytext=(0, 12), ha='center', fontsize=10, fontweight='bold')
+                    xytext=(0, 12), ha='center', fontsize=12, fontweight='bold')
     
     plt.xlabel('Mode', fontsize=12, fontweight='bold')
-    plt.xticks(modes, [f'Mode {m}' for m in modes], fontsize=11)
+    plt.xticks(modes, [f'Mode {m}' for m in modes], fontsize=13)
     
     # Đặt tên trục y dựa trên metric
     if metric_name == 'loss':
@@ -265,7 +275,7 @@ def main():
     
     # Danh sách các model cần vẽ
     models = {
-        # 'checkpoint_efcnb4': 'effb4',  
+        'checkpoint_efcnb4': 'effb4',  
         'checkpoint_conv': 'conv',
 
     }
