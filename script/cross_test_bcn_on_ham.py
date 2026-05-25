@@ -18,31 +18,26 @@ from src.utils.common import load_metadata_info, seed_everything
 # 1. CẤU HÌNH (CONFIG)
 # ==============================================================================
 CONFIG = {
-    # File CSV Test của HAM10000 (Dữ liệu đích)
-    'TEST_CSV': r'D:\skin_cancer_project\dataset\metadata\ham10000_test.csv',
-
-    # Thư mục ảnh của HAM10000 (Dữ liệu đích)
-    'IMG_ROOT': r'D:\skin_cancer_project\dataset\Ham10000-preprocessed',
-
-    # Đường dẫn Model BCN đã train (Model nguồn)
-    'CHECKPOINT_PATH': r'D:\skin_cancer_project\checkpoint_bcn20000\best_full_weighted.pt',
-    'META_INFO_PATH': r'D:\skin_cancer_project\checkpoint_bcn20000\full_weighted_resnet50\meta_info_resnet50.pkl',
-
-    'DEVICE': 'cuda' if torch.cuda.is_available() else 'cpu',
-
-    # QUAN TRỌNG: Model BCN train với size bao nhiêu (ví dụ 300) thì phải để 300
-    'IMG_SIZE': 224,
-
-    'METADATA_MODE': 'full_weighted',  # Mode mà bạn đã dùng để train BCN
-    'MODEL_NAME': 'resnet50',  # Tên model backbone đã dùng
-    'BATCH_SIZE': 32,
+    # 1. DỮ LIỆU ĐÍCH (HAM10000)
+    'TEST_CSV': r'D:\skin_cancer_project\dataset\metadata\group_safe\ham10000_test.csv',
+    'IMG_ROOT': r'D:\skin_cancer_project\dataset\Ham10000-paper-preprocessed',
     'SEED': 42,
+    # 2. MODEL NGUỒN (BCN20000)
+    # Lưu ý: Thay đổi đường dẫn này trỏ đến file .pt tốt nhất của BCN (ví dụ trong thư mục fold_1 nếu dùng CV5)
+    'CHECKPOINT_PATH': r'D:\skin_cancer_project\checkpoint_bcn20000\CV5_strategy3_effnet_b4_bcn20000\fold_4\best_strategy3_fold_4.pt',
 
-    # --- THÊM DÒNG NÀY ĐỂ SỬA LỖI KEYERROR ---
+    # File .pkl chứa Metadata Encoder và Stats được sinh ra lúc train model BCN
+    'META_INFO_PATH': r'D:\skin_cancer_project\checkpoint_bcn20000\CV5_strategy3_effnet_b4_bcn20000\fold_4\meta_info_fold4.pkl',
+
+    # 3. THÔNG SỐ KHÁC (Phải khớp chính xác với lúc bạn train model BCN)
+    'DEVICE': 'cuda', # hoặc 'cpu'
+    'IMG_SIZE': 224,
+    'METADATA_MODE': 'strategy3',
+    'MODEL_NAME': 'tf_efficientnet_b4_ns',
+    'BATCH_SIZE': 32,
     'PRETRAINED': True,
     'METADATA_FEATURE_BOOST': 1.0
 }
-
 
 # ==============================================================================
 # 2. HÀM MAPPING: HAM -> BCN
@@ -112,10 +107,6 @@ def map_ham_to_bcn(ham_df):
     else:
         print("⚠️ Cảnh báo: Không tìm thấy cột 'localization' (đã rename) trong HAM.")
 
-    # 4. Điền các cột thiếu (BCN có nhưng HAM không có)
-    df['anatom_site_special'] = 'NA'
-    df['diagnosis_confirm_type'] = 'NA'
-
     print("✅ Mapping hoàn tất.")
     return df
 
@@ -130,7 +121,7 @@ def main():
 
     # 1. Load Metadata Info từ tập TRAIN (BCN)
     print(f"📂 Loading Metadata Encoders của BCN từ: {CONFIG['META_INFO_PATH']}")
-    if CONFIG['METADATA_MODE'] != 'diag1':
+    if CONFIG['METADATA_MODE'] != 'strategy1':
         if not os.path.exists(CONFIG['META_INFO_PATH']):
             raise FileNotFoundError(f"❌ Không tìm thấy file metadata info: {CONFIG['META_INFO_PATH']}")
         encoders, num_stats = load_metadata_info(CONFIG['META_INFO_PATH'])
@@ -155,7 +146,7 @@ def main():
     test_ds = DermoscopyDataset(
         df=mapped_test_df,
         img_root=CONFIG['IMG_ROOT'],
-        img_size=CONFIG['IMG_SIZE'],  # Resize về 300 (theo chuẩn BCN)
+        img_size=CONFIG['IMG_SIZE'],
         metadata_mode=CONFIG['METADATA_MODE'],
         train=False,
         external_encoders=encoders,  # Truyền encoder của BCN vào

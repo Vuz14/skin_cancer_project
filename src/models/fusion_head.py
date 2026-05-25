@@ -176,3 +176,67 @@ class DualEmbeddingFusion(nn.Module):
             feat = self.img_embed(feat_img) if self.use_metadata else feat_img
 
         return self.classifier(feat)
+
+
+class ConcatenationFusion(nn.Module):
+    """Direct image/clinical concatenation baseline (Strategy 2)."""
+
+    def __init__(self, model_name='tf_efficientnet_b4_ns', pretrained=True, cat_cardinalities=None,
+                 num_numeric=0, num_classes=1, emb_dim=8, use_metadata=True):
+        super().__init__()
+        self.use_metadata = use_metadata
+        self.num_numeric = num_numeric
+        self.cat_cardinalities = cat_cardinalities or {}
+        self.cat_names = list(self.cat_cardinalities.keys())
+
+        if 'resnet' in model_name.lower():
+            self.backbone = ResNet50Backbone(model_name, pretrained)
+        else:
+            self.backbone = EfficientNetBackbone(model_name, pretrained)
+        self.img_dim = self.backbone.num_features
+
+        self.emb_layers = nn.ModuleDict()
+        total_emb_dim = 0
+        for cname in self.cat_names:
+            card = int(self.cat_cardinalities[cname])
+            dim = min(emb_dim, max(2, int(card ** 0.5)))
+            self.emb_layers[cname] = nn.Embedding(card, dim)
+            total_emb_dim += dim
+
+        meta_dim = total_emb_dim + max(0, num_numeric)
+        if use_metadata and meta_dim > 0:
+            self.meta_mlp = nn.Sequential(
+                nn.Linear(meta_dim, 128),
+                nn.BatchNorm1d(128),
+                nn.ReLU(),
+                nn.Dropout(0.5),
+                nn.Linear(128, 128),
+                nn.ReLU(),
+            )
+            classifier_dim = self.img_dim + 128
+        else:
+            self.use_metadata = False
+            self.meta_mlp = None
+            classifier_dim = self.img_dim
+
+        self.classifier = nn.Sequential(
+            nn.Linear(classifier_dim, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(256, num_classes),
+        )
+
+    def forward(self, x_img, meta_num=None, meta_cat=None):
+        feat_img = self.backbone(x_img.float())
+        has_meta = (meta_num is not None and meta_num.nelement() > 0) and \
+                   (meta_cat is not None and meta_cat.nelement() > 0)
+
+        if self.use_metadata and has_meta:
+            embeddings = [self.emb_layers[name](meta_cat[:, i]) for i, name in enumerate(self.cat_names)]
+            meta_input = torch.cat([meta_num] + embeddings, dim=1) if self.num_numeric > 0 else torch.cat(embeddings, dim=1)
+            feat = torch.cat([feat_img, self.meta_mlp(meta_input.float())], dim=1)
+        else:
+            feat = feat_img
+
+        return self.classifier(feat)

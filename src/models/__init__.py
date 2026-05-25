@@ -1,4 +1,4 @@
-from .fusion_head import MultimodalClassifier, DualEmbeddingFusion
+from .fusion_head import ConcatenationFusion, DualEmbeddingFusion, MultimodalClassifier
 
 def get_model(config, cat_cardinalities, num_numeric, use_metadata=True):
     """
@@ -10,8 +10,18 @@ def get_model(config, cat_cardinalities, num_numeric, use_metadata=True):
     pretrained = config.get('PRETRAINED', True)
     meta_boost = config.get('METADATA_FEATURE_BOOST', 1.0)
 
-    # 1. Nếu dùng kiến trúc Late Fusion (Dual Embedding)
-    if mode == 'late_fusion':
+    if mode in ('strategy2', 'concatenation', 'concat'):
+        return ConcatenationFusion(
+            model_name=model_name,
+            pretrained=pretrained,
+            cat_cardinalities=cat_cardinalities,
+            num_numeric=num_numeric,
+            num_classes=1,
+            use_metadata=use_metadata,
+        )
+
+    # Strategy 4: Learnable dual-embedding gating.
+    if mode in ('strategy4', 'late_fusion', 'gating'):
         return DualEmbeddingFusion(
             model_name=model_name,
             pretrained=pretrained,
@@ -23,13 +33,11 @@ def get_model(config, cat_cardinalities, num_numeric, use_metadata=True):
             use_metadata=use_metadata  # Truyền flag ngắt metadata
         )
 
-    # 2. Các mode còn lại (diag1, full, full_weighted) dùng MultimodalClassifier
+    # Strategy 1 (image-only) and Strategy 3 (FiLM).
     else:
-        # Nếu mode là diag1, ép use_metadata = False bất kể tham số truyền vào
-        actual_use_meta = use_metadata if mode != 'diag1' else False
+        actual_use_meta = use_metadata if mode not in ('diag1', 'strategy1', 'image_only') else False
         
-        # Chỉ dùng meta_weight boost khi ở chế độ weighted
-        actual_meta_weight = meta_boost if mode == 'full_weighted' else 1.0
+        actual_meta_weight = meta_boost if mode in ('full_weighted', 'strategy3_weighted') else 1.0
         
         return MultimodalClassifier(
             model_name=model_name,

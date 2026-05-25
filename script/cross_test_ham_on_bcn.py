@@ -14,22 +14,26 @@ from src.utils.common import load_metadata_info, seed_everything
 
 # --- CẤU HÌNH ---
 CONFIG = {
-    'TEST_CSV': r'D:\skin_cancer_project\dataset\metadata\bcn20000_test.csv',
-    'IMG_ROOT': r'D:\skin_cancer_project\dataset\Bcn20000-preprocessed',
+    # 1. DỮ LIỆU ĐÍCH (BCN20000)
+    'TEST_CSV': r'D:\skin_cancer_project\dataset\metadata\group_safe\bcn20000_test.csv',
+    'IMG_ROOT': r'D:\skin_cancer_project\dataset\Bcn20000-paper-preprocessed',
+    'SEED': 42,
+    # 2. MODEL NGUỒN (HAM10000)
+    # Trỏ đến checkpoint .pt của HAM
+    'CHECKPOINT_PATH': r'D:\skin_cancer_project\checkpoint_ham10000\CV5_strategy3_effnet_b4_ham10000\fold_3\best_strategy3_fold_3.pt',
 
-    # Kiểm tra kỹ đường dẫn file .pt và .pkl của bạn
-    'CHECKPOINT_PATH': r'D:\skin_cancer_project\checkpoint_ham10000\best_full_weighted.pt',
-    'META_INFO_PATH': r'D:\skin_cancer_project\checkpoint_ham10000\full_weighted_resnet50\meta_info_resnet50.pkl',
+    # File .pkl chứa encoder của HAM
+    'META_INFO_PATH': r'D:\skin_cancer_project\checkpoint_ham10000\CV5_strategy3_effnet_b4_ham10000\fold_3\meta_info_fold3.pkl',
 
-    'DEVICE': 'cuda' if torch.cuda.is_available() else 'cpu',
+    # 3. THÔNG SỐ KHÁC (Khớp với cấu hình lúc train HAM)
+    'DEVICE': 'cuda',
     'IMG_SIZE': 224,
-    'METADATA_MODE': 'full_weighted',
-    'MODEL_NAME': 'resnet50',
+    'METADATA_MODE': 'strategy3',
+    'MODEL_NAME': 'tf_efficientnet_b4_ns',
     'BATCH_SIZE': 32,
     'PRETRAINED': True,
-    'METADATA_FEATURE_BOOST': 1.0
+    'METADATA_FEATURE_BOOST': 2.0
 }
-
 
 def map_bcn_to_ham(bcn_df):
     print("🔄 Đang mapping dữ liệu BCN sang format HAM...")
@@ -63,7 +67,7 @@ def main():
     device = torch.device(CONFIG['DEVICE'])
 
     print("📂 Loading Metadata Encoders của HAM...")
-    if CONFIG['METADATA_MODE'] != 'diag1':
+    if CONFIG['METADATA_MODE'] != 'strategy1':
         if not os.path.exists(CONFIG['META_INFO_PATH']):
             print(f"❌ Lỗi: Không tìm thấy file {CONFIG['META_INFO_PATH']}")
             return
@@ -74,15 +78,12 @@ def main():
     print("📂 Loading BCN Data...")
     test_df = pd.read_csv(CONFIG['TEST_CSV'])
 
-    # --- SỬA LỖI LABEL TẠI ĐÂY ---
-    diag_col = 'diagnosis_1' if 'diagnosis_1' in test_df.columns else 'diagnosis'
-
-    # Danh sách đầy đủ các từ khóa ác tính (thêm 'malignant')
-    malignant_list = ['malignant', 'mel', 'bcc', 'scc', 'melanoma', 'basal cell', 'squamous cell', 'carcinoma']
-
-    test_df['label'] = test_df[diag_col].astype(str).str.lower().apply(
-        lambda x: 1 if any(m in x for m in malignant_list) else 0
-    )
+    if 'label' not in test_df.columns:
+        diag_col = 'diagnosis_1' if 'diagnosis_1' in test_df.columns else 'diagnosis'
+        malignant_list = ['malignant', 'mel', 'bcc', 'scc', 'melanoma', 'basal cell', 'squamous cell', 'carcinoma']
+        test_df['label'] = test_df[diag_col].astype(str).str.lower().apply(
+            lambda x: 1 if any(m in x for m in malignant_list) else 0
+        )
 
     # --- DEBUG: KIỂM TRA PHÂN PHỐI NHÃN ---
     label_counts = test_df['label'].value_counts()

@@ -1,124 +1,79 @@
+import argparse
 import os
 import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.metrics import roc_auc_score, accuracy_score, f1_score, recall_score, precision_score, confusion_matrix
+from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precision_score, recall_score, roc_auc_score
 from torch.utils.data import DataLoader
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
+sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+
 from src.data_logic.bcn_dataset import DermoscopyDataset
 from src.models import get_model
 from src.utils.common import load_metadata_info, seed_everything
-
-# --- CẤU HÌNH ENSEMBLE ---
-CONFIG = {
-    'TEST_CSV': r'D:\skin_cancer_project\dataset\metadata\bcn20000_test.csv',
-    'IMG_ROOT': r'D:\skin_cancer_project\dataset\Bcn20000-preprocessed',
-
-    # Chỉ định thư mục gốc của 5 fold vừa train xong
-    'CV_RUN_DIR': r'checkpoint_bcn20000/CV5_full_weighted_resnet50',
-
-    'DEVICE': 'cuda' if torch.cuda.is_available() else 'cpu',
-    'PRETRAINED': True,
-    'METADATA_FEATURE_BOOST': 5.0,
-    'IMG_SIZE': 224,
-    'METADATA_MODE': 'full_weighted',
-    'MODEL_NAME': 'resnet50',
-    'SHORT_NAME': 'resnet50',
-    'BATCH_SIZE': 32,
-    'SEED': 42
-}
+from src.utils.experiment_runner import BACKBONES, preprocess_bcn
 
 
-def main():
-    seed_everything(CONFIG['SEED'])
-    device = torch.device(CONFIG['DEVICE'])
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Evaluate a five-fold BCN ensemble on the hold-out test set.")
+    parser.add_argument("--strategy", default="strategy3", choices=["strategy1", "strategy2", "strategy3", "strategy4"])
+    parser.add_argument("--backbone", default="effnet_b4", choices=list(BACKBONES))
+    args = parser.parse_args()
 
-    # 1. LOAD TEST DATA (Lấy Encoder từ fold 1 là đủ vì chung tập mapping)
-    print("📂 Đang tải dữ liệu Test...")
-    test_df = pd.read_csv(CONFIG['TEST_CSV'])
-    test_df.columns = test_df.columns.str.strip()
-    if 'image_path' not in test_df.columns:
-        test_df['image_path'] = test_df['isic_id'].astype(str) + '.jpg'
-
-    test_df['diagnosis_1'] = test_df['diagnosis_1'].astype(str).str.strip().str.lower()
-    test_df['label'] = test_df['diagnosis_1'].apply(lambda x: 1 if 'malig' in x else 0)
-    true_labels = test_df['label'].values
-
-    meta_info_path = os.path.join(CONFIG['CV_RUN_DIR'], 'fold_1', f"meta_info_{CONFIG['SHORT_NAME']}.pkl")
-    encoders, num_stats = load_metadata_info(meta_info_path) if CONFIG['METADATA_MODE'] != 'diag1' else (None, None)
-
-    test_ds = DermoscopyDataset(test_df, CONFIG['IMG_ROOT'], CONFIG['IMG_SIZE'], CONFIG['METADATA_MODE'], train=False,
-                                external_encoders=encoders, external_stats=num_stats)
-    test_loader = DataLoader(test_ds, batch_size=CONFIG['BATCH_SIZE'], shuffle=False, num_workers=4)
-
-    # 2. LOAD 5 MODELS
-    models = []
-    print("\n🤖 Đang tải 5 mô hình từ các Fold...")
-    cat_cardinalities = test_ds.cat_cardinalities if encoders else {}
-    num_numeric = len(test_ds.numeric_cols) if encoders else 0
+    config = {
+        "TEST_CSV": r"D:\skin_cancer_project\dataset\metadata\group_safe\bcn20000_test.csv",
+        "IMG_ROOT": r"D:\skin_cancer_project\dataset\Bcn20000-paper-preprocessed",
+        "MODEL_OUT": Path(r"D:\skin_cancer_project\checkpoint_bcn20000"),
+        "DEVICE": "cuda" if torch.cuda.is_available() else "cpu",
+        "PRETRAINED": True,
+        "METADATA_FEATURE_BOOST": 1.0,
+        "IMG_SIZE": 224,
+        "METADATA_MODE": args.strategy,
+        "MODEL_NAME": BACKBONES[args.backbone],
+        "BATCH_SIZE": 32,
+        "SEED": 42,
+    }
+    seed_everything(config["SEED"])
+    device = torch.device(config["DEVICE"])
+    run_dir = config["MODEL_OUT"] / f"CV5_{args.strategy}_{args.backbone}_bcn20000"
+    test_df = preprocess_bcn(pd.read_csv(config["TEST_CSV"]))
+    labels = test_df["label"].to_numpy()
+    fold_probabilities = []
 
     for fold in range(1, 6):
-        model = get_model(CONFIG, cat_cardinalities, num_numeric).to(device)
+        fold_dir = run_dir / f"fold_{fold}"
+        encoders, stats = load_metadata_info(str(fold_dir / f"meta_info_fold{fold}.pkl"))
+        test_ds = DermoscopyDataset(
+            test_df, config["IMG_ROOT"], config["IMG_SIZE"], args.strategy, train=False,
+            external_encoders=encoders, external_stats=stats,
+        )
+        loader = DataLoader(test_ds, batch_size=config["BATCH_SIZE"], shuffle=False, num_workers=4)
+        model = get_model(config, test_ds.cat_cardinalities, len(test_ds.numeric_cols)).to(device)
+        checkpoint = torch.load(fold_dir / f"best_{args.strategy}_fold_{fold}.pt", map_location=device)
+        model.load_state_dict(checkpoint["state_dict"])
         model.eval()
 
-        # Cập nhật lại đường dẫn đọc file model khớp với file trainer.py đã sửa
-        ckpt_path = os.path.join(CONFIG['CV_RUN_DIR'], f'fold_{fold}', f"best_{CONFIG['METADATA_MODE']}_fold_{fold}.pt")
+        probabilities = []
+        with torch.no_grad():
+            for images, (meta_num, meta_cat), _ in loader:
+                logits = model(images.to(device), meta_num.to(device).float(), meta_cat.to(device).long())
+                probabilities.extend(torch.sigmoid(logits).cpu().numpy().reshape(-1))
+        fold_probabilities.append(probabilities)
 
-        if not os.path.exists(ckpt_path):
-            print(f"❌ KHÔNG TÌM THẤY file model: {ckpt_path}")
-            continue  # Bỏ qua fold này nếu không thấy file
-
-        checkpoint = torch.load(ckpt_path, map_location=device)
-        model.load_state_dict(checkpoint['state_dict'] if 'state_dict' in checkpoint else checkpoint)
-        models.append(model)
-        print(f"   ✅ Đã load Model Fold {fold}")
-
-    # 3. CHẠY INFERENCE & ENSEMBLE (AVERAGE VOTING)
-    print("\n🚀 Đang chạy dự đoán Ensemble trên tập Test...")
-    ensemble_preds = []
-
-    with torch.no_grad():
-        for batch in test_loader:
-            imgs = batch['image'].to(device)
-            meta = {k: v.to(device) for k, v in batch['metadata'].items()} if 'metadata' in batch else None
-
-            # Lưu xác suất của batch này cho 5 model (Kích thước: [5, batch_size])
-            batch_probs = []
-            for model in models:
-                outputs = model(imgs, meta) if meta else model(imgs)
-                probs = torch.sigmoid(outputs).squeeze(-1)  # Xác suất từ 0 đến 1
-                batch_probs.append(probs.cpu().numpy())
-
-            # Tính trung bình xác suất của 5 model: (p1+p2+p3+p4+p5)/5
-            avg_probs = np.mean(batch_probs, axis=0)
-            ensemble_preds.extend(avg_probs)
-
-    ensemble_preds = np.array(ensemble_preds)
-    ensemble_preds_binary = (ensemble_preds >= 0.5).astype(int)
-
-    # 4. TÍNH METRICS CUỐI CÙNG CHO BẢNG 2
-    auc = roc_auc_score(true_labels, ensemble_preds)
-    acc = accuracy_score(true_labels, ensemble_preds_binary)
-    f1 = f1_score(true_labels, ensemble_preds_binary, zero_division=0)
-    rec = recall_score(true_labels, ensemble_preds_binary, zero_division=0)
-    prec = precision_score(true_labels, ensemble_preds_binary, zero_division=0)
-    tn, fp, fn, tp = confusion_matrix(true_labels, ensemble_preds_binary).ravel()
-    spec = tn / (tn + fp) if (tn + fp) > 0 else 0
-
-    print("\n" + "🏆" * 20)
-    print("BẢNG 2: KẾT QUẢ ĐỈNH (ENSEMBLE 5-FOLD)")
-    print("🏆" * 20)
-    print(f"AUC       : {auc:.4f}")
-    print(f"Accuracy  : {acc:.4f}")
-    print(f"F1-Score  : {f1:.4f}")
-    print(f"Recall    : {rec:.4f}")
-    print(f"Precision : {prec:.4f}")
-    print(f"Specificity: {spec:.4f}")
-    print("=" * 40)
+    probabilities = np.mean(np.asarray(fold_probabilities), axis=0)
+    predictions = (probabilities >= 0.5).astype(int)
+    tn, fp, fn, tp = confusion_matrix(labels, predictions).ravel()
+    print(f"AUC: {roc_auc_score(labels, probabilities):.4f}")
+    print(f"Accuracy: {accuracy_score(labels, predictions):.4f}")
+    print(f"F1: {f1_score(labels, predictions, zero_division=0):.4f}")
+    print(f"Precision: {precision_score(labels, predictions, zero_division=0):.4f}")
+    print(f"Recall: {recall_score(labels, predictions, zero_division=0):.4f}")
+    print(f"Specificity: {tn / (tn + fp + 1e-12):.4f}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

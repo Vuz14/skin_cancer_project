@@ -31,10 +31,13 @@ class DermoscopyDataset(Dataset):
             self.df['label'] = self.df['diagnosis_1'].apply(lambda x: 1 if 'malig' in x else 0)
 
         # --- 2. CẤU HÌNH METADATA ---
-        self.all_categorical = ['anatom_site_general', 'anatom_site_special', 'diagnosis_confirm_type', 'sex']
+        # Restrict inputs to metadata available before diagnosis, as stated in
+        # the experimental protocol. Confirmation/biopsy columns are targets'
+        # downstream consequences and must never be model inputs.
+        self.all_categorical = ['anatom_site_general', 'sex']
         self.all_numeric = ['age_approx']
 
-        if self.metadata_mode == 'diag1':
+        if self.metadata_mode in ('diag1', 'strategy1', 'image_only'):
             self.categorical_cols = []
             self.numeric_cols = []
         else:
@@ -46,7 +49,7 @@ class DermoscopyDataset(Dataset):
         self.num_mean_std: Dict[str, Tuple[float, float]] = {}
 
         # Logic xử lý Encoder/Stats (Chỉ chạy nếu không phải mode diag1)
-        if self.metadata_mode in ('full', 'full_weighted', 'late_fusion'):
+        if self.metadata_mode not in ('diag1', 'strategy1', 'image_only'):
             if external_encoders and external_stats:
                 self.encoders = external_encoders
                 self.num_mean_std = external_stats
@@ -108,8 +111,8 @@ class DermoscopyDataset(Dataset):
             return img.convert("RGB")
 
     def _encode_metadata(self, row: pd.Series):
-        if self.metadata_mode == 'diag1':
-            return torch.zeros(len(self.all_numeric)), torch.zeros(len(self.all_categorical), dtype=torch.long)
+        if self.metadata_mode in ('diag1', 'strategy1', 'image_only'):
+            return torch.zeros(0, dtype=torch.float32), torch.zeros(0, dtype=torch.long)
 
         nums = []
         for nc in self.numeric_cols:
@@ -140,9 +143,5 @@ class DermoscopyDataset(Dataset):
         
         label = torch.tensor(int(row['label']), dtype=torch.float32)
         meta_num, meta_cat = self._encode_metadata(row)
-
-        if self.metadata_mode == 'late_fusion':
-            meta_vec = torch.cat([meta_num, meta_cat.float()], dim=0)
-            return img, (meta_vec, torch.zeros(0)), label
 
         return img, (meta_num, meta_cat), label

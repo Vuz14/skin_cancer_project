@@ -57,7 +57,7 @@ class HAM10000Dataset(Dataset):
         # ==========================================================
         # 1. KHỞI TẠO ENCODERS & STATS
         # ==========================================================
-        if self.metadata_mode in ('full', 'full_weighted', 'late_fusion'):
+        if self.metadata_mode not in ('diag1', 'strategy1', 'image_only'):
             # Ưu tiên dùng Encoder/Stats truyền từ ngoài (Khi Test)
             if external_encoders and external_stats:
                 self.encoders = external_encoders
@@ -125,8 +125,8 @@ class HAM10000Dataset(Dataset):
             return img.convert("RGB")
 
     def _encode_metadata(self, row: pd.Series):
-        if self.metadata_mode == 'diag1':
-            return torch.zeros(len(self.numeric_cols)), torch.zeros(len(self.categorical_cols), dtype=torch.long)
+        if self.metadata_mode in ('diag1', 'strategy1', 'image_only'):
+            return torch.zeros(0, dtype=torch.float32), torch.zeros(0, dtype=torch.long)
         
         nums = []
         for nc in self.numeric_cols:
@@ -161,8 +161,5 @@ class HAM10000Dataset(Dataset):
 
         label = torch.tensor(int(row['label']), dtype=torch.float32)
         meta_num, meta_cat = self._encode_metadata(row)
-
-        if self.metadata_mode == 'late_fusion':
-             return img, (meta_num, meta_cat), label
 
         return img, (meta_num, meta_cat), label

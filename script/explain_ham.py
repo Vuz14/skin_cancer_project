@@ -9,19 +9,20 @@ import shap
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from src.data_logic.ham_dataset import HAM10000Dataset
 from src.models import get_model
+from src.utils.experiment_runner import preprocess_ham
 
 # ------------------- CONFIG -------------------
 TEST_CONFIG = {
-    'TEST_CSV': r'D:\skin_cancer_project\dataset\metadata\ham10000_test.csv',
-    'TRAIN_CSV': r'D:\skin_cancer_project\dataset\metadata\ham10000_train.csv',
-    'IMG_ROOT': r'D:\skin_cancer_project\dataset\Ham10000-preprocessed',
+    'TEST_CSV': r'D:\skin_cancer_project\dataset\metadata\group_safe\ham10000_test.csv',
+    'TRAIN_CSV': r'D:\skin_cancer_project\dataset\metadata\group_safe\ham10000_train.csv',
+    'IMG_ROOT': r'D:\skin_cancer_project\dataset\Ham10000-paper-preprocessed',
     'MODEL_OUT': r'D:\skin_cancer_project\checkpoint_ham10000',
     'DEVICE': 'cuda',
     
     'MODEL_NAME': 'tf_efficientnet_b4_ns',
-    'SHORT_NAME': 'effb4', # Dùng để lưu file
+    'SHORT_NAME': 'effnet_b4',
     'IMG_SIZE': 224,
-    'METADATA_MODE': 'full_weighted',
+    'METADATA_MODE': 'strategy3',
     'PRETRAINED': True,
     'NSAMPLES_SHAP': 50,
 }
@@ -56,18 +57,18 @@ def get_ham_x_mapping():
 
 def load_model_and_data(config):
     device = torch.device(config['DEVICE'])
-    train_df = pd.read_csv(config['TRAIN_CSV'])
-    test_df = pd.read_csv(config['TEST_CSV'])
-    
-    for df in [train_df, test_df]:
-        df['image_path'] = df['image_id'].astype(str) + '.jpg'
-        if 'dx' in df.columns:
-            df['label'] = df['dx'].apply(lambda x: 1 if x in ['mel', 'bcc', 'akiec'] else 0)
+    train_df = preprocess_ham(pd.read_csv(config['TRAIN_CSV']))
+    test_df = preprocess_ham(pd.read_csv(config['TEST_CSV']))
 
     train_ds = HAM10000Dataset(train_df, config['IMG_ROOT'], config['IMG_SIZE'], config['METADATA_MODE'], train=False)
     model = get_model(config, train_ds.cat_cardinalities, len(train_ds.numeric_cols)).to(device)
     
-    ckpt = os.path.join(config['MODEL_OUT'], f"best_{config['METADATA_MODE']}.pt")
+    ckpt = os.path.join(
+        config['MODEL_OUT'],
+        f"CV5_{config['METADATA_MODE']}_{config['SHORT_NAME']}_ham10000",
+        "fold_1",
+        f"best_{config['METADATA_MODE']}_fold_1.pt",
+    )
     model.load_state_dict(torch.load(ckpt, map_location=device)['state_dict'])
     model.eval()
     

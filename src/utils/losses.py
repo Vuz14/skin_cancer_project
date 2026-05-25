@@ -25,7 +25,8 @@ class FocalLossBCE(nn.Module):
         probs = torch.sigmoid(logits)
         pt = torch.where(targets == 1, probs, 1 - probs)
 
-        focal_weight = self.alpha * (1 - pt) ** self.gamma
+        alpha_t = targets * self.alpha + (1 - targets) * (1 - self.alpha)
+        focal_weight = alpha_t * (1 - pt) ** self.gamma
 
         loss = focal_weight * bce_loss
 

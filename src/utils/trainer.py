@@ -120,20 +120,12 @@ def evaluate(model: nn.Module, loader, device='cpu', is_late_fusion=None, find_b
     all_probs, all_targets = [], []
     bce = nn.BCEWithLogitsLoss(reduction='mean')
 
-    if is_late_fusion is None:
-        is_late_fusion = hasattr(model, "metadata_mode") and model.metadata_mode == "late_fusion"
-
     with torch.no_grad():
         for batch in loader:
             imgs, meta, labels = batch
             imgs, labels = imgs.to(device), labels.to(device, dtype=torch.float32).view(-1, 1)
-
-            if is_late_fusion:
-                meta_vec, _ = meta
-                logits = model(imgs, meta_vec.to(device).float(), None)
-            else:
-                m_num, m_cat = meta
-                logits = model(imgs, m_num.to(device).float(), m_cat.to(device).long())
+            m_num, m_cat = meta
+            logits = model(imgs, m_num.to(device).float(), m_cat.to(device).long())
 
             loss = bce(logits, labels)
             loss_sum += loss.item() * imgs.size(0)
@@ -168,8 +160,6 @@ def evaluate(model: nn.Module, loader, device='cpu', is_late_fusion=None, find_b
 def train_loop(model, train_loader, val_loader, test_loader, config, criterion, optimizer, scheduler, device,
                 log_suffix=""):
     scaler = torch.amp.GradScaler('cuda', enabled=(device.type == 'cuda'))
-    is_late_fusion = (config["METADATA_MODE"] == "late_fusion")
-
     run_dir = config.get('RUN_DIR', config['MODEL_OUT'])
     os.makedirs(run_dir, exist_ok=True)
 
@@ -189,12 +179,8 @@ def train_loop(model, train_loader, val_loader, test_loader, config, criterion, 
             imgs, labels = imgs.to(device), labels.to(device).float().view(-1, 1)
             optimizer.zero_grad(set_to_none=True)
             with torch.amp.autocast('cuda', enabled=(device.type == 'cuda')):
-                if is_late_fusion:
-                    meta_vec, _ = meta
-                    logits = model(imgs, meta_vec.to(device).float(), None)
-                else:
-                    m_num, m_cat = meta
-                    logits = model(imgs, m_num.to(device).float(), m_cat.to(device).long())
+                m_num, m_cat = meta
+                logits = model(imgs, m_num.to(device).float(), m_cat.to(device).long())
 
                 smooth = config.get('LABEL_SMOOTHING', 0.0)
                 labels_smooth = labels * (1 - smooth) + 0.5 * smooth
@@ -208,8 +194,8 @@ def train_loop(model, train_loader, val_loader, test_loader, config, criterion, 
             train_loss_sum += loss.item() * imgs.size(0)
 
         # Sửa lỗi: Truyền find_best_threshold=True cho Val để tối ưu kết quả
-        train_res = evaluate(model, train_loader, device, is_late_fusion, find_best_threshold=False)
-        val_res = evaluate(model, val_loader, device, is_late_fusion, find_best_threshold=True)
+        train_res = evaluate(model, train_loader, device, find_best_threshold=False)
+        val_res = evaluate(model, val_loader, device, find_best_threshold=False)
 
         epoch_row = {'epoch': epoch}
         epoch_row.update({f'train_{k}': v for k, v in train_res.items()})
@@ -235,7 +221,7 @@ def train_loop(model, train_loader, val_loader, test_loader, config, criterion, 
             if counter >= patience: 
                 print(f"🛑 Early stopping."); break
 
-        if HAS_GRADCAM and epoch % config.get('GRADCAM_SAVE_EVERY', 5) == 0:
+        if config.get('ENABLE_GRAD_CAM', False) and HAS_GRADCAM and epoch % config.get('GRADCAM_SAVE_EVERY', 5) == 0:
             save_dir = os.path.join(run_dir, f"gradcam_ep{epoch}")
             val_batch = next(iter(val_loader))
             val_imgs = val_batch[0]
@@ -249,12 +235,12 @@ def train_loop(model, train_loader, val_loader, test_loader, config, criterion, 
     else:
         print(f"⚠️ Cảnh báo: Không tìm thấy file model tốt nhất tại {best_ckpt_path}")
 
-    print("\n🚀 Huấn luyện hoàn tất. Đánh giá trên tập Test...")
-    # Khi đánh giá Test, ta có thể dùng threshold mặc định 0.5 hoặc threshold tối ưu từ tập Val. 
-    # Ở đây mình để mặc định 0.5 cho khách quan.
-    test_metrics = evaluate(model, test_loader, device, is_late_fusion, find_best_threshold=False)
+    print("\n🚀 Huấn luyện hoàn tất. Đánh giá validation fold và hold-out test...")
+    val_metrics = evaluate(model, val_loader, device, find_best_threshold=False)
+    test_metrics = evaluate(model, test_loader, device, find_best_threshold=False)
 
+    pd.DataFrame([val_metrics]).to_csv(os.path.join(run_dir, f"val_metrics_{log_suffix}.csv"), index=False)
     pd.DataFrame([test_metrics]).to_csv(os.path.join(run_dir, f"test_metrics_{log_suffix}.csv"), index=False)
     plot_metrics_combined(history_data, test_metrics, run_dir, config['METADATA_MODE'], log_suffix)
 
-    return model.state_dict(), history_data, test_metrics
+    return model.state_dict(), history_data, val_metrics, test_metrics
