@@ -1,14 +1,14 @@
 import os
 from typing import Dict, Tuple, Optional
 
-import albumentations as A
 import numpy as np
 import pandas as pd
 import torch
 from PIL import Image
-from albumentations.pytorch import ToTensorV2
 from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import Dataset
+
+from src.data_logic.common_transforms import build_dermoscopy_transform, uses_metadata
 
 class DermoscopyDataset(Dataset):
     def __init__(self, df: pd.DataFrame, img_root: str, img_size: int, metadata_mode: str = 'diag1',
@@ -37,9 +37,12 @@ class DermoscopyDataset(Dataset):
         self.all_categorical = ['anatom_site_general', 'sex']
         self.all_numeric = ['age_approx']
 
-        if self.metadata_mode in ('diag1', 'strategy1', 'image_only'):
+        if not uses_metadata(self.metadata_mode):
             self.categorical_cols = []
             self.numeric_cols = []
+        elif selected_features is not None:
+            self.categorical_cols = [c for c in self.all_categorical if c in selected_features]
+            self.numeric_cols = [c for c in self.all_numeric if c in selected_features]
         else:
             self.categorical_cols = [c for c in self.all_categorical if c in self.df.columns]
             self.numeric_cols = [c for c in self.all_numeric if c in self.df.columns]
@@ -49,8 +52,8 @@ class DermoscopyDataset(Dataset):
         self.num_mean_std: Dict[str, Tuple[float, float]] = {}
 
         # Logic xử lý Encoder/Stats (Chỉ chạy nếu không phải mode diag1)
-        if self.metadata_mode not in ('diag1', 'strategy1', 'image_only'):
-            if external_encoders and external_stats:
+        if uses_metadata(self.metadata_mode):
+            if external_encoders is not None and external_stats is not None:
                 self.encoders = external_encoders
                 self.num_mean_std = external_stats
                 for c in self.categorical_cols:
@@ -70,35 +73,7 @@ class DermoscopyDataset(Dataset):
                     std = float(np.nanstd(arr)) + 1e-6 if not np.all(np.isnan(arr)) else 1.0
                     self.num_mean_std[nc] = (mean, std)
 
-        # --- 3. ĐỊNH NGHĨA TRANSFORM (ĐÃ ĐƯA RA NGOÀI ĐỂ LUÔN CÓ BIẾN NÀY) ---
-        if self.train:
-            self.transform = A.Compose([
-                A.Resize(img_size, img_size),
-                A.HorizontalFlip(p=0.5),
-                A.VerticalFlip(p=0.5),
-                A.RandomRotate90(p=0.5),
-                A.Affine(
-                    scale=(0.9, 1.1),
-                    translate_percent={"x": (-0.1, 0.1), "y": (-0.1, 0.1)},
-                    rotate=(-45, 45),
-                    p=0.5
-                ),
-                A.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1, p=0.5),
-                A.CoarseDropout(
-                    num_holes_range=(1, 8),
-                    hole_height_range=(0.05, 0.1),
-                    hole_width_range=(0.05, 0.1),
-                    p=0.3
-                ),
-                A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-                ToTensorV2(),
-            ])
-        else:
-            self.transform = A.Compose([
-                A.Resize(img_size, img_size),
-                A.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-                ToTensorV2(),
-            ])
+        self.transform = build_dermoscopy_transform(img_size, train)
 
     def __len__(self):
         return len(self.df)
@@ -111,7 +86,7 @@ class DermoscopyDataset(Dataset):
             return img.convert("RGB")
 
     def _encode_metadata(self, row: pd.Series):
-        if self.metadata_mode in ('diag1', 'strategy1', 'image_only'):
+        if not uses_metadata(self.metadata_mode):
             return torch.zeros(0, dtype=torch.float32), torch.zeros(0, dtype=torch.long)
 
         nums = []

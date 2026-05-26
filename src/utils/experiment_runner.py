@@ -52,9 +52,28 @@ POST_DIAGNOSTIC_BCN_COLUMNS = [
 
 def select_group_column(df: pd.DataFrame) -> tuple[str, str]:
     """Use lesion identifiers to prevent the same lesion crossing splits."""
-    if "lesion_id" in df.columns and df["lesion_id"].notna().any():
-        return "lesion_id", "lesion-level"
-    raise ValueError("The dataset must provide lesion_id for lesion-level group-safe evaluation.")
+    if "lesion_id" not in df.columns:
+        raise ValueError("The dataset must provide lesion_id for lesion-level group-safe evaluation.")
+    missing = df["lesion_id"].isna() | df["lesion_id"].astype(str).str.strip().eq("")
+    if missing.any():
+        raise ValueError(
+            f"The dataset contains {int(missing.sum())} records without lesion_id; "
+            "lesion-level evaluation cannot fall back to image identifiers."
+        )
+    return "lesion_id", "lesion-level"
+
+
+def _validate_lesion_ids(df: pd.DataFrame, dataset_name: str) -> pd.DataFrame:
+    if "lesion_id" not in df.columns:
+        raise ValueError(f"{dataset_name} input must contain lesion_id for lesion-level evaluation.")
+    missing = df["lesion_id"].isna() | df["lesion_id"].astype(str).str.strip().eq("")
+    if missing.any():
+        raise ValueError(
+            f"{dataset_name} input contains {int(missing.sum())} records without lesion_id; "
+            "remove or identify these lesions before generating splits."
+        )
+    df["lesion_id"] = df["lesion_id"].astype(str).str.strip()
+    return df
 
 
 def preprocess_ham(df: pd.DataFrame) -> pd.DataFrame:
@@ -67,7 +86,7 @@ def preprocess_ham(df: pd.DataFrame) -> pd.DataFrame:
             raise ValueError("HAM input must contain either label or dx.")
         malignant = {"mel", "bcc", "akiec"}
         df["label"] = df["dx"].astype(str).str.lower().isin(malignant).astype(int)
-    df["lesion_id"] = df["lesion_id"].fillna(df["image_path"])
+    df = _validate_lesion_ids(df, "HAM10000")
     return df.drop(columns=["dx", "dx_type"], errors="ignore")
 
 
@@ -89,9 +108,7 @@ def preprocess_bcn(df: pd.DataFrame) -> pd.DataFrame:
         diagnosis = diagnosis.loc[valid]
         df["label"] = (diagnosis == "malignant").astype(int)
 
-    if "lesion_id" not in df.columns:
-        df["lesion_id"] = df["image_path"]
-    df["lesion_id"] = df["lesion_id"].fillna(df["image_path"])
+    df = _validate_lesion_ids(df, "BCN20000")
 
     # Drop post-diagnostic attributes after creating the binary target.
     return df.drop(columns=POST_DIAGNOSTIC_BCN_COLUMNS, errors="ignore")
