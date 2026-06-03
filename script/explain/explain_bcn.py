@@ -1,4 +1,4 @@
-import sys
+﻿import sys
 import os
 import torch
 import numpy as np
@@ -6,7 +6,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import shap
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from src.data_logic.bcn_dataset import DermoscopyDataset
 from src.models import get_model
@@ -16,7 +16,7 @@ from src.utils.experiment_runner import preprocess_bcn
 TEST_CONFIG = {
     'TEST_CSV': r'D:\skin_cancer_project\dataset\metadata\group_safe\bcn20000_test.csv',
     'TRAIN_CSV': r'D:\skin_cancer_project\dataset\metadata\group_safe\bcn20000_train.csv',
-    'IMG_ROOT': r'D:\skin_cancer_project\dataset\Bcn20000-paper-preprocessed',
+    'IMG_ROOT': r'D:\skin_cancer_project\dataset\Bcn20000-color-safe-preprocessed',
     'MODEL_OUT': r'D:\skin_cancer_project\checkpoint_bcn20000',
     'DEVICE': 'cuda' if torch.cuda.is_available() else 'cpu',
 
@@ -27,9 +27,9 @@ TEST_CONFIG = {
     'PRETRAINED': True,
     'NSAMPLES_SHAP': 50,
 
-    # --- ĐƯỜNG DẪN TỚI FILE QUAN TRỌNG ĐÃ CẬP NHẬT ---
+    # --- ÄÆ¯á»œNG DáºªN Tá»šI FILE QUAN TRá»ŒNG ÄÃƒ Cáº¬P NHáº¬T ---
     'FEATURE_IMP_CSV': r'D:\skin_cancer_project\checkpoint_bcn20000\bcn_meta_importance.csv',
-    'TOP_K_FEATURES': 3 # Giữ lại 3 biến
+    'TOP_K_FEATURES': 3 # Giá»¯ láº¡i 3 biáº¿n
 }
 
 def get_selected_features(config):
@@ -37,10 +37,10 @@ def get_selected_features(config):
         imp_df = pd.read_csv(config['FEATURE_IMP_CSV'])
         imp_df['Base_Feature'] = imp_df['Feature'].apply(lambda x: x.split('=')[0] if '=' in x else x)
         selected_base_features = imp_df['Base_Feature'].drop_duplicates().head(config['TOP_K_FEATURES']).tolist()
-        print(f"✅ Sẽ chỉ hiển thị {len(selected_base_features)} biến trên biểu đồ: {selected_base_features}")
+        print(f"âœ… Sáº½ chá»‰ hiá»ƒn thá»‹ {len(selected_base_features)} biáº¿n trÃªn biá»ƒu Ä‘á»“: {selected_base_features}")
         return selected_base_features
     except Exception as e:
-        print(f"⚠️ Lỗi đọc file CSV: {e}. Mặc định lấy 3 biến: age_approx, anatom_site_general, sex")
+        print(f"âš ï¸ Lá»—i Ä‘á»c file CSV: {e}. Máº·c Ä‘á»‹nh láº¥y 3 biáº¿n: age_approx, anatom_site_general, sex")
         return ['age_approx', 'anatom_site_general', 'sex']
 
 def load_model_and_encoders(config):
@@ -50,21 +50,21 @@ def load_model_and_encoders(config):
 
     selected_features = get_selected_features(config)
 
-    # 🚀 GIỮ NGUYÊN BỘ BIẾN ĐỂ MÔ HÌNH KHÔNG BỊ LỖI INDEX TENSOR
+    # ðŸš€ GIá»® NGUYÃŠN Bá»˜ BIáº¾N Äá»‚ MÃ” HÃŒNH KHÃ”NG Bá»Š Lá»–I INDEX TENSOR
     train_ds = DermoscopyDataset(
         train_df, config['IMG_ROOT'], config['IMG_SIZE'], config['METADATA_MODE'], train=False
     )
 
     model = get_model(config, train_ds.cat_cardinalities, len(train_ds.numeric_cols)).to(device)
 
-    # Chỉ định đến Fold 4 (nơi có file model của bạn)
+    # Chá»‰ Ä‘á»‹nh Ä‘áº¿n Fold 4 (nÆ¡i cÃ³ file model cá»§a báº¡n)
     ckpt_dir = os.path.join(config['MODEL_OUT'], f"CV5_{config['METADATA_MODE']}_{config['SHORT_NAME']}_bcn20000", "fold_2")
     ckpt_path = os.path.join(ckpt_dir, f"best_{config['METADATA_MODE']}_fold_2.pt")
 
     if os.path.exists(ckpt_path):
         model.load_state_dict(torch.load(ckpt_path, map_location=device)['state_dict'])
     else:
-        print(f"❌ Không tìm thấy: {ckpt_path}")
+        print(f"âŒ KhÃ´ng tÃ¬m tháº¥y: {ckpt_path}")
         return None, None, None, None, None
 
     model.eval()
@@ -72,9 +72,9 @@ def load_model_and_encoders(config):
 
 def run_shap_analysis(model, train_ds, test_df, device, selected_features):
     if model is None: return
-    print("⏳ Đang tính toán SHAP values...")
+    print("â³ Äang tÃ­nh toÃ¡n SHAP values...")
 
-    # Lấy mẫu dữ liệu
+    # Láº¥y máº«u dá»¯ liá»‡u
     subset_df = test_df.sample(n=min(30, len(test_df)), random_state=42)
     bg_df = train_ds.df.sample(n=min(15, len(train_ds.df)), random_state=123)
 
@@ -129,7 +129,7 @@ def run_shap_analysis(model, train_ds, test_df, device, selected_features):
     shap_vals = explainer.shap_values(test_data, nsamples=TEST_CONFIG['NSAMPLES_SHAP'])
     if isinstance(shap_vals, list): shap_vals = shap_vals[1]
 
-    # --- LỌC BIẾN ---
+    # --- Lá»ŒC BIáº¾N ---
     keep_indices, filtered_col_names = [], []
     for i, col in enumerate(col_names):
         if any(col == sf or col.startswith(sf + "_") for sf in selected_features):
@@ -140,52 +140,52 @@ def run_shap_analysis(model, train_ds, test_df, device, selected_features):
     filtered_test_data = test_data[:, keep_indices]
     final_cols = [f"X{i+1}" for i in range(len(filtered_col_names))]
 
-    # --- CẤU HÌNH VẼ BIỂU ĐỒ ---
-    FONT_SIZE = 26  # Tăng font chữ lên mức rất to
+    # --- Cáº¤U HÃŒNH Váº¼ BIá»‚U Äá»’ ---
+    FONT_SIZE = 26  # TÄƒng font chá»¯ lÃªn má»©c ráº¥t to
     plt.rcParams.update({'font.size': FONT_SIZE})
 
-    # Tăng figsize rộng ra để các dấu chấm to không bị đè nhau
+    # TÄƒng figsize rá»™ng ra Ä‘á»ƒ cÃ¡c dáº¥u cháº¥m to khÃ´ng bá»‹ Ä‘Ã¨ nhau
     fig = plt.figure(figsize=(18, 11))
 
-    # Vẽ SHAP
-    # Tham số quan trọng: 's' điều chỉnh kích thước chấm (mặc định thường là 15-20)
+    # Váº½ SHAP
+    # Tham sá»‘ quan trá»ng: 's' Ä‘iá»u chá»‰nh kÃ­ch thÆ°á»›c cháº¥m (máº·c Ä‘á»‹nh thÆ°á»ng lÃ  15-20)
     shap.summary_plot(
         filtered_shap_vals,
         pd.DataFrame(filtered_test_data, columns=final_cols),
         show=False,
         max_display=len(final_cols),
         plot_size=None,
-        alpha=0.8, # Tăng độ đậm của chấm
+        alpha=0.8, # TÄƒng Ä‘á»™ Ä‘áº­m cá»§a cháº¥m
     )
 
-    # Can thiệp vào các thành phần đã vẽ để tăng size dấu chấm
+    # Can thiá»‡p vÃ o cÃ¡c thÃ nh pháº§n Ä‘Ã£ váº½ Ä‘á»ƒ tÄƒng size dáº¥u cháº¥m
     ax = plt.gca()
     for child in ax.get_children():
         if isinstance(child, plt.matplotlib.collections.PathCollection):
-            child.set_sizes([100]) # Ép kích thước tất cả dấu chấm lên 100 (to gấp 5 lần mặc định)
+            child.set_sizes([100]) # Ã‰p kÃ­ch thÆ°á»›c táº¥t cáº£ dáº¥u cháº¥m lÃªn 100 (to gáº¥p 5 láº§n máº·c Ä‘á»‹nh)
 
-    # 1. Xóa định dạng 1e-5 (Scientific notation)
+    # 1. XÃ³a Ä‘á»‹nh dáº¡ng 1e-5 (Scientific notation)
     ax.xaxis.set_major_formatter(plt.ScalarFormatter(useMathText=False))
     ax.ticklabel_format(style='plain', axis='x')
 
-    # 2. Tăng kích thước chữ cho Ticks & Labels
-    ax.tick_params(axis='y', labelsize=FONT_SIZE + 6) # X1, X2... to vượt trội
+    # 2. TÄƒng kÃ­ch thÆ°á»›c chá»¯ cho Ticks & Labels
+    ax.tick_params(axis='y', labelsize=FONT_SIZE + 6) # X1, X2... to vÆ°á»£t trá»™i
     ax.tick_params(axis='x', labelsize=FONT_SIZE)
     ax.set_xlabel("SHAP value (impact on model output)", fontsize=FONT_SIZE + 2, fontweight='bold')
 
-    # 3. Chỉnh Colorbar (Thanh màu bên phải)
+    # 3. Chá»‰nh Colorbar (Thanh mÃ u bÃªn pháº£i)
     cfm = plt.gcf()
     if len(cfm.axes) > 1:
         cbar_ax = cfm.axes[-1]
         cbar_ax.set_ylabel('Feature value', fontsize=FONT_SIZE + 2, fontweight='bold')
         cbar_ax.tick_params(labelsize=FONT_SIZE)
 
-    # Lưu ảnh với chất lượng cao
+    # LÆ°u áº£nh vá»›i cháº¥t lÆ°á»£ng cao
     save_path = os.path.join(TEST_CONFIG['MODEL_OUT'], f"bcn20k_{TEST_CONFIG['SHORT_NAME']}_big_dots.png")
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close(fig)
     plt.rcParams.update(plt.rcParamsDefault)
-    print(f"🎉 Biểu đồ SIÊU TO KHỔNG LỒ đã lưu tại: {save_path}")
+    print(f"ðŸŽ‰ Biá»ƒu Ä‘á»“ SIÃŠU TO KHá»”NG Lá»’ Ä‘Ã£ lÆ°u táº¡i: {save_path}")
 
 if __name__ == "__main__":
     model, device, train_ds, test_df, selected_features = load_model_and_encoders(TEST_CONFIG)

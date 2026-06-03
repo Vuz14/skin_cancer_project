@@ -45,7 +45,15 @@ def set_finetune_mode(model: torch.nn.Module, mode: str = 'partial_unfreeze', su
     elif mode == 'partial_unfreeze':
         for _, p in model.named_parameters(): p.requires_grad = False
         for name, p in model.named_parameters():
-            if name.startswith('classifier') or 'metadata_mlp' in name or 'emb_layers' in name:
+            if (
+                name.startswith('classifier')
+                or 'metadata_mlp' in name
+                or 'meta_mlp' in name
+                or 'film_generator' in name
+                or 'emb_layers' in name
+                or 'img_embed' in name
+                or 'gate' in name
+            ):
                 p.requires_grad = True
         if substrings:
             for name, p in model.named_parameters():

@@ -1,8 +1,21 @@
-import torch
+﻿import torch
 import torch.nn as nn
 from typing import Optional, Dict
+from .backbone.convnext import ConvNeXtBackbone
 from .backbone.efficientnetB4 import EfficientNetBackbone
 from .backbone.resnet50 import ResNet50Backbone
+from .backbone.vit16 import ViT16Backbone
+
+
+def build_image_backbone(model_name: str, pretrained: bool):
+    model_name_lower = model_name.lower()
+    if "convnext" in model_name_lower:
+        return ConvNeXtBackbone(model_name, pretrained)
+    if "vit" in model_name_lower:
+        return ViT16Backbone(model_name, pretrained)
+    if "resnet" in model_name_lower:
+        return ResNet50Backbone(model_name, pretrained)
+    return EfficientNetBackbone(model_name, pretrained)
 
 class MultimodalClassifier(nn.Module):
     def __init__(self, model_name='tf_efficientnet_b4_ns', pretrained=True, cat_cardinalities: Optional[Dict[str, int]] = None,
@@ -12,16 +25,13 @@ class MultimodalClassifier(nn.Module):
         self.num_numeric = num_numeric
         self.cat_cardinalities = cat_cardinalities or {}
         self.emb_dim = emb_dim
-        self.meta_weight = meta_weight # Trọng số điều chỉnh mức độ ảnh hưởng của FiLM
+        self.meta_weight = meta_weight # Trá»ng sá»‘ Ä‘iá»u chá»‰nh má»©c Ä‘á»™ áº£nh hÆ°á»Ÿng cá»§a FiLM
 
-        # --- CHỌN BACKBONE ---
-        if 'resnet' in model_name.lower():
-            self.backbone = ResNet50Backbone(model_name, pretrained)
-        else:
-            self.backbone = EfficientNetBackbone(model_name, pretrained)
+        # --- CHá»ŒN BACKBONE ---
+        self.backbone = build_image_backbone(model_name, pretrained)
         self.img_features_dim = self.backbone.num_features
 
-        # --- CẤU HÌNH METADATA ---
+        # --- Cáº¤U HÃŒNH METADATA ---
         self.cat_names = list(self.cat_cardinalities.keys())
         self.emb_layers = nn.ModuleDict()
         total_emb_dim = 0
@@ -33,7 +43,7 @@ class MultimodalClassifier(nn.Module):
 
         if use_metadata:
             input_meta_dim = total_emb_dim + max(0, num_numeric)
-            # FiLM generator: Tạo gamma và beta
+            # FiLM generator: Táº¡o gamma vÃ  beta
             self.film_generator = nn.Sequential(
                 nn.Linear(input_meta_dim, 128),
                 nn.BatchNorm1d(128),
@@ -43,7 +53,7 @@ class MultimodalClassifier(nn.Module):
                 nn.ReLU(),
                 nn.Linear(64, self.img_features_dim * 2)
             )
-            # Khởi tạo về 0 để ban đầu mô hình coi như chưa có metadata
+            # Khá»Ÿi táº¡o vá» 0 Ä‘á»ƒ ban Ä‘áº§u mÃ´ hÃ¬nh coi nhÆ° chÆ°a cÃ³ metadata
             self.film_generator[-1].weight.data.zero_()
             self.film_generator[-1].bias.data.zero_()
             
@@ -71,16 +81,16 @@ class MultimodalClassifier(nn.Module):
         if x_img.dtype == torch.float16: x_img = x_img.float()
         feat_img = self.backbone(x_img)
 
-        # Check nelement chuẩn như code cũ của bạn
+        # Check nelement chuáº©n nhÆ° code cÅ© cá»§a báº¡n
         has_meta_input = (meta_num is not None and meta_num.nelement() > 0) and \
                          (meta_cat is not None and meta_cat.nelement() > 0)
 
         if self.use_metadata and has_meta_input:
-            # 1. Xử lý Categorical
+            # 1. Xá»­ lÃ½ Categorical
             emb_list = [self.emb_layers[c](meta_cat[:, i]) for i, c in enumerate(self.cat_names)]
             emb_concat = torch.cat(emb_list, dim=1)
 
-            # 2. Kết hợp với Numeric
+            # 2. Káº¿t há»£p vá»›i Numeric
             meta_input = torch.cat([meta_num, emb_concat], dim=1) if self.num_numeric > 0 else emb_concat
             if meta_input.dtype == torch.float16: meta_input = meta_input.float()
 
@@ -88,7 +98,7 @@ class MultimodalClassifier(nn.Module):
             film_params = self.film_generator(meta_input)
             gamma, beta = torch.split(film_params, self.img_features_dim, dim=1)
             
-            # Cải tiến: Thêm meta_weight để điều tiết sức mạnh của metadata
+            # Cáº£i tiáº¿n: ThÃªm meta_weight Ä‘á»ƒ Ä‘iá»u tiáº¿t sá»©c máº¡nh cá»§a metadata
             feat = (1 + gamma * self.meta_weight) * feat_img + (beta * self.meta_weight)
         else:
             feat = feat_img
@@ -106,10 +116,7 @@ class DualEmbeddingFusion(nn.Module):
         self.cat_names = list(self.cat_cardinalities.keys())
         self.emb_dim = emb_dim
 
-        if 'resnet' in model_name.lower():
-            self.backbone = ResNet50Backbone(model_name, pretrained)
-        else:
-            self.backbone = EfficientNetBackbone(model_name, pretrained)
+        self.backbone = build_image_backbone(model_name, pretrained)
         self.img_dim = self.backbone.num_features
 
         self.emb_layers = nn.ModuleDict()
@@ -158,12 +165,12 @@ class DualEmbeddingFusion(nn.Module):
                    (meta_cat is not None and meta_cat.nelement() > 0)
 
         if self.use_metadata and has_meta:
-            # FIX LỖI "feat_meta is not defined":
+            # FIX Lá»–I "feat_meta is not defined":
             emb_list = [self.emb_layers[c](meta_cat[:, i]) for i, c in enumerate(self.cat_names)]
             emb_concat = torch.cat(emb_list, dim=1)
             meta_input = torch.cat([meta_num, emb_concat], dim=1) if self.num_numeric > 0 else emb_concat
             
-            # Tính toán feat_meta từ dữ liệu đầu vào
+            # TÃ­nh toÃ¡n feat_meta tá»« dá»¯ liá»‡u Ä‘áº§u vÃ o
             feat_meta = self.meta_mlp(meta_input.float())
 
             feat_img_proj = self.img_embed(feat_img)
@@ -189,10 +196,7 @@ class ConcatenationFusion(nn.Module):
         self.cat_cardinalities = cat_cardinalities or {}
         self.cat_names = list(self.cat_cardinalities.keys())
 
-        if 'resnet' in model_name.lower():
-            self.backbone = ResNet50Backbone(model_name, pretrained)
-        else:
-            self.backbone = EfficientNetBackbone(model_name, pretrained)
+        self.backbone = build_image_backbone(model_name, pretrained)
         self.img_dim = self.backbone.num_features
 
         self.emb_layers = nn.ModuleDict()

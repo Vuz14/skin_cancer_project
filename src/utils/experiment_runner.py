@@ -38,6 +38,24 @@ BACKBONES = {
     "vit": "vit_base_patch16_224",
 }
 
+BACKBONE_TRAINING_OVERRIDES = {
+    "resnet50": {},
+    "effnet_b4": {},
+    "convnext": {
+        "BATCH_SIZE": 16,
+        "BASE_LR": 5e-5,
+        "FINE_TUNE_MODE": "partial_unfreeze",
+        "UNFREEZE_KEYWORDS": ["stages.3", "head", "norm"],
+    },
+    "vit": {
+        "BATCH_SIZE": 16,
+        "BASE_LR": 5e-5,
+        "WEIGHT_DECAY": 1e-4,
+        "FINE_TUNE_MODE": "partial_unfreeze",
+        "UNFREEZE_KEYWORDS": ["blocks.10", "blocks.11", "norm", "head"],
+    },
+}
+
 POST_DIAGNOSTIC_BCN_COLUMNS = [
     "concomitant_biopsy",
     "diagnosis",
@@ -139,6 +157,10 @@ def run_configuration(base_config: dict, dataset_name: str, strategy: str, backb
     config["METADATA_MODE"] = strategy
     config["MODEL_NAME"] = BACKBONES[backbone_key]
     config["SHORT_NAME"] = backbone_key
+    explicit_keys = set(config.get("EXPLICIT_CONFIG_KEYS", []))
+    for key, value in BACKBONE_TRAINING_OVERRIDES.get(backbone_key, {}).items():
+        if key not in explicit_keys:
+            config[key] = value
     seed_everything(config["SEED"])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     config["DEVICE"] = str(device)
@@ -164,6 +186,8 @@ def run_configuration(base_config: dict, dataset_name: str, strategy: str, backb
             "strategy": strategy,
             "strategy_name": STRATEGIES[strategy],
             "backbone": config["MODEL_NAME"],
+            "img_root": config["IMG_ROOT"],
+            "augmentation_profile": config.get("AUGMENTATION_PROFILE", "light"),
             "group_column": group_col,
             "protocol_level": protocol_level,
             "metadata": "pre-diagnostic only",
@@ -182,14 +206,24 @@ def run_configuration(base_config: dict, dataset_name: str, strategy: str, backb
         fold_dir.mkdir(parents=True, exist_ok=True)
         config["RUN_DIR"] = str(fold_dir)
 
-        train_ds = dataset_class(fold_train, config["IMG_ROOT"], config["IMG_SIZE"], strategy, train=True)
+        augmentation_profile = config.get("AUGMENTATION_PROFILE", "light")
+        train_ds = dataset_class(
+            fold_train,
+            config["IMG_ROOT"],
+            config["IMG_SIZE"],
+            strategy,
+            train=True,
+            augmentation_profile=augmentation_profile,
+        )
         val_ds = dataset_class(
             fold_val, config["IMG_ROOT"], config["IMG_SIZE"], strategy, train=False,
             external_encoders=train_ds.encoders, external_stats=train_ds.num_mean_std,
+            augmentation_profile=augmentation_profile,
         )
         test_ds = dataset_class(
             test, config["IMG_ROOT"], config["IMG_SIZE"], strategy, train=False,
             external_encoders=train_ds.encoders, external_stats=train_ds.num_mean_std,
+            augmentation_profile=augmentation_profile,
         )
         save_metadata_info(str(fold_dir / f"meta_info_fold{fold}.pkl"), train_ds.encoders, train_ds.num_mean_std)
 

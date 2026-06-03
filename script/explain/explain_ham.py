@@ -1,4 +1,4 @@
-import sys
+﻿import sys
 import os
 import torch
 import numpy as np
@@ -6,7 +6,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import shap
 
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 from src.data_logic.ham_dataset import HAM10000Dataset
 from src.models import get_model
 from src.utils.experiment_runner import preprocess_ham
@@ -15,9 +15,9 @@ from src.utils.experiment_runner import preprocess_ham
 TEST_CONFIG = {
     'TEST_CSV': r'D:\skin_cancer_project\dataset\metadata\group_safe\ham10000_test.csv',
     'TRAIN_CSV': r'D:\skin_cancer_project\dataset\metadata\group_safe\ham10000_train.csv',
-    'IMG_ROOT': r'D:\skin_cancer_project\dataset\Ham10000-paper-preprocessed',
+    'IMG_ROOT': r'D:\skin_cancer_project\dataset\Ham10000-color-safe-preprocessed',
     'MODEL_OUT': r'D:\skin_cancer_project\checkpoint_ham10000',
-    'DEVICE': 'cuda',
+    'DEVICE': 'cuda' if torch.cuda.is_available() else 'cpu',
     
     'MODEL_NAME': 'tf_efficientnet_b4_ns',
     'SHORT_NAME': 'effnet_b4',
@@ -27,7 +27,7 @@ TEST_CONFIG = {
     'NSAMPLES_SHAP': 50,
 }
 
-# ------------------- MAPPING CHUẨN (X1-Xn) CHO HAM10000 -------------------
+# ------------------- MAPPING CHUáº¨N (X1-Xn) CHO HAM10000 -------------------
 def get_ham_x_mapping():
     return {
         'age': 'X1 (Age)',
@@ -37,7 +37,7 @@ def get_ham_x_mapping():
         'sex_female': 'X3 (Female)',
         'sex_unknown': 'X4 (Sex_NA)',
         
-        # Localization (Vị trí)
+        # Localization (Vá»‹ trÃ­)
         'localization_lower extremity': 'X5 (Loc_Lower_Ext)',
         'localization_trunk': 'X6 (Loc_Trunk)',
         'localization_back': 'X7 (Loc_Back)',
@@ -75,7 +75,7 @@ def load_model_and_data(config):
     return model, device, train_ds, test_df
 
 def run_shap_analysis(model, train_ds, test_df, device):
-    print("⏳ Đang tính toán SHAP Values...")
+    print("â³ Äang tÃ­nh toÃ¡n SHAP Values...")
     
     # 1. Prepare Data
     subset_df = test_df.sample(n=min(30, len(test_df)), random_state=42)
@@ -154,7 +154,7 @@ def run_shap_analysis(model, train_ds, test_df, device):
     save_name = f"ham10k_{TEST_CONFIG['SHORT_NAME']}_shap.png"
     save_path = os.path.join(TEST_CONFIG['MODEL_OUT'], save_name)
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    print(f"🎉 Đã lưu biểu đồ SHAP tại: {save_path}")
+    print(f"ðŸŽ‰ ÄÃ£ lÆ°u biá»ƒu Ä‘á»“ SHAP táº¡i: {save_path}")
 
 if __name__ == "__main__":
     model, device, train_ds, test_df = load_model_and_data(TEST_CONFIG)

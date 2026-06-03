@@ -12,8 +12,8 @@ from src.data_logic.common_transforms import build_dermoscopy_transform, uses_me
 
 class DermoscopyDataset(Dataset):
     def __init__(self, df: pd.DataFrame, img_root: str, img_size: int, metadata_mode: str = 'diag1',
-                 train: bool = True, selected_features: Optional[list] = None,
-                 external_encoders=None, external_stats=None):
+                  train: bool = True, selected_features: Optional[list] = None,
+                  external_encoders=None, external_stats=None, augmentation_profile: str = "light"):
         
         self.df = df.copy().reset_index(drop=True)
         self.df.columns = self.df.columns.str.strip()
@@ -73,7 +73,7 @@ class DermoscopyDataset(Dataset):
                     std = float(np.nanstd(arr)) + 1e-6 if not np.all(np.isnan(arr)) else 1.0
                     self.num_mean_std[nc] = (mean, std)
 
-        self.transform = build_dermoscopy_transform(img_size, train)
+        self.transform = build_dermoscopy_transform(img_size, train, augmentation_profile)
 
     def __len__(self):
         return len(self.df)

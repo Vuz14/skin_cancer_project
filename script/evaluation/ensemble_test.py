@@ -1,4 +1,4 @@
-import argparse
+﻿import argparse
 import os
 import sys
 from pathlib import Path
@@ -10,7 +10,7 @@ from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precisio
 from torch.utils.data import DataLoader
 
 
-sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from src.data_logic.bcn_dataset import DermoscopyDataset
 from src.models import get_model
@@ -22,19 +22,22 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate a five-fold BCN ensemble on the hold-out test set.")
     parser.add_argument("--strategy", default="strategy3", choices=["strategy1", "strategy2", "strategy3", "strategy4"])
     parser.add_argument("--backbone", default="effnet_b4", choices=list(BACKBONES))
+    parser.add_argument("--img-root", default=r"D:\skin_cancer_project\dataset\Bcn20000-color-safe-preprocessed")
+    parser.add_argument("--model-out", default=r"D:\skin_cancer_project\checkpoint_bcn20000")
+    parser.add_argument("--batch-size", type=int, default=32)
     args = parser.parse_args()
 
     config = {
         "TEST_CSV": r"D:\skin_cancer_project\dataset\metadata\group_safe\bcn20000_test.csv",
-        "IMG_ROOT": r"D:\skin_cancer_project\dataset\Bcn20000-paper-preprocessed",
-        "MODEL_OUT": Path(r"D:\skin_cancer_project\checkpoint_bcn20000"),
+        "IMG_ROOT": args.img_root,
+        "MODEL_OUT": Path(args.model_out),
         "DEVICE": "cuda" if torch.cuda.is_available() else "cpu",
         "PRETRAINED": True,
         "METADATA_FEATURE_BOOST": 1.0,
         "IMG_SIZE": 224,
         "METADATA_MODE": args.strategy,
         "MODEL_NAME": BACKBONES[args.backbone],
-        "BATCH_SIZE": 32,
+        "BATCH_SIZE": args.batch_size,
         "SEED": 42,
     }
     seed_everything(config["SEED"])
