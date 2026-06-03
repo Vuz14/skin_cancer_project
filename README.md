@@ -104,18 +104,6 @@ deliverables/
   Tài liệu, hình ảnh và sản phẩm báo cáo đã sinh ra.
 ```
 
-## Tiền xử lý ảnh
-
-Pipeline mới ưu tiên profile `color_safe`.
-
-Khác với pipeline cũ, profile này hạn chế các bước có nguy cơ làm lệch màu sinh học của tổn thương:
-
-- không dùng Gray-World mặc định
-- CLAHE chỉ tác động nhẹ trên kênh L trong LAB
-- giữ thông tin chroma tốt hơn
-- vẫn hỗ trợ xóa lông để giảm nhiễu do hair artifact
-
-Pipeline cũ vẫn được giữ dưới profile `legacy` để phục vụ tái lập hoặc ablation.
 
 ## Đánh giá
 
